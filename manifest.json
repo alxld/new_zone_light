@@ -1,0 +1,17 @@
+{
+  "domain": "new_zone_light",
+  "name": "New Zone Light",
+  "version": "0.2",
+  "config_flow": true,
+  "single_config_entry": false,
+  "documentation": "https://www.home-assistant.io/integrations/new_zone_light",
+  "requirements": ["suntime==1.2.5"],
+  "ssdp": [],
+  "zeroconf": [],
+  "homekit": {},
+  "after_dependencies": ["light"],
+  "dependencies": ["mqtt"],
+  "codeowners": ["@alxld"],
+  "iot_class": "calculated",
+  "integration_type": "device"
+}

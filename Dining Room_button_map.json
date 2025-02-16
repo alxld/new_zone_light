@@ -1,0 +1,14 @@
+{
+    "on-hold": [
+        [ [ "RightLight", "light.dining_room_group", 0 ],
+          [ "RightLight", "light.dining_room_chandeliers_group", "Disable" ],
+          [ "RightLight", "light.dining_table_chandelier_group", 30 ],
+          [ "Color",      "light.piano_chandelier_group", 0, 0, 200 ]
+        ],
+        [ [ "RightLight", "light.dining_room_group", 0 ],
+          [ "RightLight", "light.dining_room_chandeliers_group", "Disable" ],
+          [ "RightLight", "light.dining_table_chandelier_group", 30 ],
+          [ "Color",      "light.piano_chandelier_group", 60, 0, 150 ]
+        ]
+    ]
+}
