@@ -134,7 +134,7 @@ class RightLight:
                 {
                     "entity_id": self._entity,
                     "brightness": br,
-                    "kelvin": ct,
+                    "color_temp_kelvin": ct,
                     # "transition": self.on_transition,
                     "transition": this_transition,
                     # "effect": "stop_effect",
@@ -168,7 +168,7 @@ class RightLight:
                     {
                         "entity_id": self._entity,
                         "brightness": br_next,
-                        "kelvin": ct_next,
+                        "color_temp_kelvin": ct_next,
                         "transition": time_rem,
                     },
                 )
@@ -379,10 +379,10 @@ class RightLight:
             )
         else:
             self.trip_points["Normal"].append(
-                [self.midnight_early, [2500, 150]]
+                [self.midnight_early, [2200, 38]]
             )  # Midnight morning
             self.trip_points["Normal"].append(
-                [self.sunrise - timedelta(minutes=60), [2500, 120]]
+                [self.sunrise - timedelta(minutes=60), [2200, 38]]
             )  # Sunrise - 60
             self.trip_points["Normal"].append(
                 [self.sunrise - timedelta(minutes=30), [2700, 170]]

@@ -15,20 +15,23 @@ from homeassistant.components import mqtt
 from homeassistant.components.light import (  # ATTR_EFFECT,; ATTR_FLASH,; ATTR_WHITE_VALUE,; PLATFORM_SCHEMA,; SUPPORT_EFFECT,; SUPPORT_FLASH,; SUPPORT_WHITE_VALUE,; ATTR_SUPPORTED_COLOR_MODES,
     ATTR_BRIGHTNESS,
     ATTR_COLOR_MODE,
-    ATTR_COLOR_TEMP,
+    #ATTR_COLOR_TEMP,
+    ATTR_COLOR_TEMP_KELVIN,
     ATTR_EFFECT,
     ATTR_EFFECT_LIST,
     ATTR_HS_COLOR,
-    ATTR_MAX_MIREDS,
-    ATTR_MIN_MIREDS,
+    #ATTR_MAX_MIREDS,
+    #ATTR_MIN_MIREDS,
+    ATTR_MIN_COLOR_TEMP_KELVIN,
+    ATTR_MAX_COLOR_TEMP_KELVIN,
     ATTR_RGB_COLOR,
     ATTR_TRANSITION,
     ENTITY_ID_FORMAT,
-    SUPPORT_BRIGHTNESS,
-    SUPPORT_COLOR,
-    SUPPORT_COLOR_TEMP,
-    SUPPORT_TRANSITION,
-    SUPPORT_EFFECT,
+    #SUPPORT_BRIGHTNESS,
+    #SUPPORT_COLOR,
+    #SUPPORT_COLOR_TEMP,
+    #SUPPORT_TRANSITION,
+    #SUPPORT_EFFECT,
     LightEntity,
     LightEntityFeature,
     PLATFORM_SCHEMA,
@@ -273,14 +276,18 @@ class NewZoneLight(LightEntity):
         """Allow brightness above 255 (for going brighter than RightLight default)"""
         self._hs_color: Optional[Tuple[float, float]] = None
         """Light's current color in hs"""
-        self._color_temp: Optional[int] = None
+        self._color_temp_kelvin: Optional[int] = None
         """Light's current color in Kelvin"""
         self._rgb_color: Optional[Tuple[int, int, int]] = None
         """Light's current color in RGB"""
-        self._min_mireds: int = 154
-        """Light's minimum supported mireds"""
-        self._max_mireds: int = 500
-        """Light's maximum supported mireds"""
+        #self._min_mireds: int = 154
+        #"""Light's minimum supported mireds"""
+        #self._max_mireds: int = 500
+        #"""Light's maximum supported mireds"""
+        self._min_color_temp_kelvin: int = 2200
+        """Light's minimum supported kelvin"""
+        self._max_color_temp_kelvin: int = 6500
+        """Light's maximum supported kelvin"""
         self._mode = "Off"
         """Light's current mode"""
         self._is_on = False
@@ -311,12 +318,12 @@ class NewZoneLight(LightEntity):
         """Data loaded from optional JSON button map script"""
         # self._effect: Optional[str] = None
         self._supported_features: int = 0
-        """Supported features of this light.  OR togther SUPPORT_BRIGHTNESS, SUPPORT_COLOR_TEMP, SUPPORT_COLOR, SUPPORT_TRANSITION"""
-        self._supported_features |= SUPPORT_BRIGHTNESS
-        self._supported_features |= SUPPORT_COLOR_TEMP
-        self._supported_features |= SUPPORT_COLOR
-        self._supported_features |= SUPPORT_TRANSITION
-        self._supported_features |= SUPPORT_EFFECT
+        #"""Supported features of this light.  OR togther SUPPORT_BRIGHTNESS, SUPPORT_COLOR_TEMP, SUPPORT_COLOR, SUPPORT_TRANSITION"""
+        #self._supported_features |= SUPPORT_BRIGHTNESS
+        #self._supported_features |= SUPPORT_COLOR_TEMP
+        #self._supported_features |= SUPPORT_COLOR
+        #self._supported_features |= SUPPORT_TRANSITION
+        #self._supported_features |= SUPPORT_EFFECT
         # self._supported_features |= SUPPORT_WHITE_VALUE
 
         self._buttonCounts = {
@@ -486,15 +493,26 @@ class NewZoneLight(LightEntity):
         """Return the CT color value in kelvin."""
         return self._color_temp
 
-    @property
-    def min_mireds(self) -> int:
-        """Return the coldest color_temp that this light group supports."""
-        return self._min_mireds
+    ## 3/23/2025 - deprecated
+    #@property
+    #def min_mireds(self) -> int:
+    #    """Return the coldest color_temp that this light group supports."""
+    #    return self._min_mireds
+    #
+    #@property
+    #def max_mireds(self) -> int:
+    #    """Return the warmest color_temp that this light group supports."""
+    #    return self._max_mireds
 
     @property
-    def max_mireds(self) -> int:
+    def min_color_temp_kelvin(self) -> int:
+        """Return the coldest color_temp that this light group supports."""
+        return self._min_color_temp_kelvin
+
+    @property
+    def max_color_temp_kelvin(self) -> int:
         """Return the warmest color_temp that this light group supports."""
-        return self._max_mireds
+        return self._max_color_temp_kelvin
 
     @property
     def rgb_color(self) -> tuple[int, int, int] | None:
@@ -507,22 +525,23 @@ class NewZoneLight(LightEntity):
     #    """Flag supported features."""
     #    return self._supported_features
 
-    @property
-    def supported_features(self) -> LightEntityFeature:
-        return LightEntityFeature.EFFECT | LightEntityFeature.TRANSITION
+    #@property
+    #def supported_features(self) -> LightEntityFeature:
+    #    return LightEntityFeature.EFFECT | LightEntityFeature.TRANSITION
 
     @property
     def supported_color_modes(self) -> set[ColorMode] | set[str] | None:
         """Reports the supported color modes as required by HA"""
         return set([ColorMode.COLOR_TEMP, ColorMode.RGB])
 
+    ## 3/23/2025 - deprecated
     @property
     def color_mode(self) -> ColorMode:
         if self._curr_effect and self._curr_effect == "Normal":
             return ColorMode.COLOR_TEMP
         else:
-            #return ColorMode.RGB
-            return ColorMode.ONOFF
+            return ColorMode.RGB
+            #return ColorMode.ONOFF
 
     @property
     def effect(self):
@@ -628,7 +647,7 @@ class NewZoneLight(LightEntity):
         for this_attr in [
             ATTR_HS_COLOR,
             ATTR_RGB_COLOR,
-            ATTR_COLOR_TEMP,
+            ATTR_COLOR_TEMP_KELVIN,
             ATTR_COLOR_MODE,
         ]:
             if this_attr in kwargs:
@@ -855,9 +874,9 @@ class NewZoneLight(LightEntity):
                     f"{self.name} LIGHT ASYNC_TURN_OFF_HELPER turning off {ent}"
                 )
             await self.entities[ent].disable_and_turn_off(**kwargs)
-        if self._debug:
-            _LOGGER.debug(f"{self.name} LIGHT ASYNC_TURN_OFF_HELPER turning off {f}")
-        await self.entities[f].disable_and_turn_off(**kwargs)
+        #if self._debug:
+        #    _LOGGER.debug(f"{self.name} LIGHT ASYNC_TURN_OFF_HELPER turning off {f}")
+        #await self.entities[f].disable_and_turn_off(**kwargs)
 
         self.async_schedule_update_ha_state(force_refresh=True)
 
@@ -905,9 +924,11 @@ class NewZoneLight(LightEntity):
 
         self._hs_color = state.attributes.get(ATTR_HS_COLOR, self._hs_color)
         self._rgb_color = state.attributes.get(ATTR_RGB_COLOR, self._rgb_color)
-        self._color_temp = state.attributes.get(ATTR_COLOR_TEMP, self._color_temp)
-        self._min_mireds = state.attributes.get(ATTR_MIN_MIREDS, 154)
-        self._max_mireds = state.attributes.get(ATTR_MAX_MIREDS, 500)
+        self._color_temp = state.attributes.get(ATTR_COLOR_TEMP_KELVIN, self._color_temp_kelvin)
+        self._min_color_temp_kelvin = state.attributes.get(ATTR_MIN_COLOR_TEMP_KELVIN, self._min_color_temp_kelvin)
+        self._max_color_temp_kelvin = state.attributes.get(ATTR_MAX_COLOR_TEMP_KELVIN, self._max_color_temp_kelvin)
+        #self._min_mireds = state.attributes.get(ATTR_MIN_MIREDS, 154)
+        #self._max_mireds = state.attributes.get(ATTR_MAX_MIREDS, 500)
         # self._effect_list = state.attributes.get(ATTR_EFFECT_LIST)
 
         # Reload JSON buttonmap regularly

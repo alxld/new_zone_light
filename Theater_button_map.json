@@ -1,10 +1,12 @@
 {
     "on_hold": [
-        [ [ "RightLight", "light.theater_group", "Vivid" ] ],
+        [ [ "RightLight", "light.theater_group", "Vivid" ],
+          [ "RightLight", "light.theater_ec_bars", "Vivid"] ],
         [ [ "RightLight", "light.theater_group", "Bright"] ]
     ],
     "on-hold": [
-        [ [ "RightLight", "light.theater_group", "Vivid" ] ],
+        [ [ "RightLight", "light.theater_group", "Vivid"] ,
+          [ "RightLight", "light.theater_ec_bars", "Vivid"] ],
         [ [ "RightLight", "light.theater_group", "Bright"] ]
     ]
 }
