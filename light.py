@@ -1,6 +1,7 @@
 """Platform for light integration"""
 from __future__ import annotations
 from collections import OrderedDict
+from homeassistant.helpers.event import async_call_later
 
 ## TODO: Pull rgb_color property from RightLight (or any on entity)
 ## TODO: Look ingo rgbw_color/rgbww_color.  Need to use ColorMode.RGBW/RGBWW.
@@ -10,6 +11,7 @@ import logging, logging.handlers
 import sys, os
 import voluptuous as vol
 import asyncio
+import re
 from homeassistant.components import mqtt
 
 from homeassistant.components.light import (  # ATTR_EFFECT,; ATTR_FLASH,; ATTR_WHITE_VALUE,; PLATFORM_SCHEMA,; SUPPORT_EFFECT,; SUPPORT_FLASH,; SUPPORT_WHITE_VALUE,; ATTR_SUPPORTED_COLOR_MODES,
@@ -124,7 +126,7 @@ def setup_platform(hass: HomeAssistant, config: ConfigType, async_add_entities: 
         for ent in config.get(CONF_ENTITIES_BELOW_THRESHOLD):
             #if not ent in nzl.entities:
             #    nzl.entities[ent] = None
-            _LOGGER.debug(f"Adding {ent} below threshold")
+            _LOGGER.debug(f"{nzl.name}: Adding {ent} below threshold")
             #nzl.entities_below_threshold.append(ent)
             temp_dict[ent] = None
         nzl.entities_below_threshold = temp_dict
@@ -134,15 +136,15 @@ def setup_platform(hass: HomeAssistant, config: ConfigType, async_add_entities: 
         for ent in config.get(CONF_ENTITIES_ABOVE_THRESHOLD):
             #if not ent in nzl.entities:
             #    nzl.entities[ent] = None
-            _LOGGER.debug(f"Adding {ent} above threshold")
+            _LOGGER.debug(f"{nzl.name}: Adding {ent} above threshold")
             #nzl.entities_above_threshold.append(ent)
             temp_dict[ent] = None
         nzl.entities_above_threshold = temp_dict
 
     if nzl._debug:
-        _LOGGER.debug(f"Normal entities: {nzl.entities}")
-        _LOGGER.debug(f"Below threshold entities: {nzl.entities_below_threshold}")
-        _LOGGER.debug(f"Above threshold entities: {nzl.entities_above_threshold}")
+        _LOGGER.debug(f"{nzl.name}: Normal entities: {nzl.entities}")
+        _LOGGER.debug(f"{nzl.name}: Below threshold entities: {nzl.entities_below_threshold}")
+        _LOGGER.debug(f"{nzl.name}: Above threshold entities: {nzl.entities_above_threshold}")
 
     nzl.has_brightness_threshold = config.get(CONF_HAS_BRIGHTNESS_THRESHOLD)
     if config.get(CONF_MOTION_SENSORS):
@@ -177,6 +179,8 @@ def setup_platform(hass: HomeAssistant, config: ConfigType, async_add_entities: 
     nzl.has_button_map = config.get(CONF_HAS_BUTTON_MAP)
 
     async_add_entities([nzl])
+    if nzl._debug:
+        _LOGGER.debug(f"{nzl.name}: Done")
 
 async def async_update(call: ServiceCall | None = None) -> None:
     """Update lights"""
@@ -195,6 +199,9 @@ class NewZoneLight(LightEntity):
             _LOGGER.setLevel(logging.DEBUG)
 
         super().__init__()
+
+        # Store callback for cancelling scheduled next event per motion sensor
+        self._currSched = {}
 
         self.entities = OrderedDict()
         """Dictionary of entities.  Each will be a rightlight object and be addressable from the json buttonmap.  The first
@@ -369,9 +376,19 @@ class NewZoneLight(LightEntity):
 
         # Start with all motion sensor states as off
         for ms in self.motion_sensors:
-            self._occupancies[ms] = False
+            if self._debug:
+                _LOGGER.info(f"{self.name} motion sensor: {ms}")
+            if '/' in ms:
+                this_ms = re.match(r"^zigbee2mqtt.*/([^\/]+)", ms).group(1)
+                self._occupancies[this_ms] = False
+            else:
+                self._occupancies[ms] = False
         for ms in self.full_brightness_motion_sensors:
-            self._full_brightness_occupancies[ms] = False
+            if '/' in ms:
+                this_ms = re.match(r"^zigbee2mqtt.*/([^\/]+)", ms).group(1)
+                self._full_brightness_occupancies[this_ms] = False
+            else:
+                self._full_brightness_occupancies[ms] = False
 
         # Dictionary to track other light states
         for ent in self.other_light_trackers:
@@ -398,7 +415,10 @@ class NewZoneLight(LightEntity):
                 self.hass.bus.async_listen("zha_event", self.switch_message_received)
             else:
                 # Zigbee2mqtt type switch
-                switch_action = f"zigbee2mqtt/{self.switch}/action"
+                if "/" in self.switch:
+                    switch_action = f"{self.switch}/action"
+                else:
+                    switch_action = f"zigbee2mqtt/{self.switch}/action"
                 await mqtt.async_subscribe(self.hass, switch_action, self.switch_message_received)
 
         # Subscribe to motion sensor events
@@ -408,7 +428,10 @@ class NewZoneLight(LightEntity):
                     self.hass, ms, self.motion_sensor_message_received_zha
                 )
             else:
-                action = f"zigbee2mqtt/{ms}"
+                if "/" in ms:
+                    action = ms
+                else:
+                    action = f"zigbee2mqtt/{ms}"
                 await mqtt.async_subscribe(self.hass, action, self.motion_sensor_message_received)
 
         # if self.has_motion_sensor:
@@ -436,6 +459,22 @@ class NewZoneLight(LightEntity):
 
         self.async_schedule_update_ha_state(force_refresh=True)
     
+    def _cancelSched(self, entity_id: str):
+        if self._debug:
+            _LOGGER.error(f"{self.name} _cancelSched: {entity_id}")
+        if entity_id in self._currSched and self._currSched[entity_id]:
+            ret = self._currSched[entity_id]
+            if callable(ret):
+                ret()
+            else:
+                ret.cancel()
+            self._currSched[entity_id] = None
+
+    def _addSched(self, entity_id, ret):
+        if self._debug:
+            _LOGGER.error(f"{self.name} _addSched: {entity_id}")
+        self._currSched[entity_id] = ret
+
     @property
     def should_poll(self):
         """Allows for color updates to be polled"""
@@ -491,7 +530,7 @@ class NewZoneLight(LightEntity):
     @property
     def color_temp_kelvin(self) -> Optional[int]:
         """Return the CT color value in kelvin."""
-        return self._color_temp
+        return self._color_temp_kelvin
 
     ## 3/23/2025 - deprecated
     #@property
@@ -924,7 +963,7 @@ class NewZoneLight(LightEntity):
 
         self._hs_color = state.attributes.get(ATTR_HS_COLOR, self._hs_color)
         self._rgb_color = state.attributes.get(ATTR_RGB_COLOR, self._rgb_color)
-        self._color_temp = state.attributes.get(ATTR_COLOR_TEMP_KELVIN, self._color_temp_kelvin)
+        self._color_temp_kelvin = state.attributes.get(ATTR_COLOR_TEMP_KELVIN, self._color_temp_kelvin)
         self._min_color_temp_kelvin = state.attributes.get(ATTR_MIN_COLOR_TEMP_KELVIN, self._min_color_temp_kelvin)
         self._max_color_temp_kelvin = state.attributes.get(ATTR_MAX_COLOR_TEMP_KELVIN, self._max_color_temp_kelvin)
         #self._min_mireds = state.attributes.get(ATTR_MIN_MIREDS, 154)
@@ -1117,6 +1156,75 @@ class NewZoneLight(LightEntity):
     #                        f"{self.name} error - unrecognized button_map.json command type: {command[0]}"
     #                    )
 
+    async def motion_sensor_on(self, entity_id: str) -> None:
+        """Set motion sensor to 'on' state"""
+        delta_found = False
+
+        if self._debug:
+            _LOGGER.debug(f"{self.name} motion sensor on: {entity_id}")
+
+        if entity_id in self._occupancies:
+            if self._occupancies[entity_id] != True:
+                delta_found = True
+            self._occupancies[entity_id] = True
+            self._occupancy = any(self._occupancies.values())
+        elif entity_id in self._full_brightness_occupancies:
+            self._full_brightness_occupancies[entity_id] = True
+            self._full_brightness_occupancy = any(self._full_brightness_occupancies.values())
+        else:
+            _LOGGER.error(f"{self.name}: Unexpected motion sensor name: {entity_id}")
+            return
+
+        # Schedule motion_sensor_off call after timeout
+        self._cancelSched(entity_id)
+        #ret = async_call_later(self.hass, self.motion_sensor_timeout, lambda _: self.motion_sensor_off(entity_id))
+        def schedule_motion_sensor_off(hass, now=None):
+            if self._debug:
+                _LOGGER.debug(f"{self.name} scheduling motion sensor off: {entity_id}")
+            self.hass.create_task(self.motion_sensor_off(entity_id))
+
+        if self._debug:
+            _LOGGER.debug(f"{self.name} scheduling motion sensor off in {self.motion_sensor_timeout} seconds")
+        ret = async_call_later(self.hass, self.motion_sensor_timeout, schedule_motion_sensor_off)
+        if self._debug:
+            _LOGGER.debug(f"{self.name} scheduling complete")
+        self._addSched(entity_id, ret)
+
+        if delta_found:
+            await self.handle_motion_sensor_state()
+
+    async def motion_sensor_off(self, entity_id: str) -> None:
+        """Set motion sensor to 'off' state"""
+        if self._debug:
+            _LOGGER.debug(f"{self.name} motion sensor off: {entity_id}")
+
+        if entity_id in self._occupancies:
+            self._occupancies[entity_id] = False
+            self._occupancy = any(self._occupancies.values())
+        elif entity_id in self._full_brightness_occupancies:
+            self._full_brightness_occupancies[entity_id] = False
+            self._full_brightness_occupancy = any(self._full_brightness_occupancies.values())
+        else:
+            _LOGGER.error(f"{self.name}: Unexpected motion sensor name: {entity_id}")
+            return
+
+        await self.handle_motion_sensor_state()
+    
+    async def handle_motion_sensor_state(self) -> None:
+        """Handle motion sensor state changes"""
+        # Schedule motion_sensor_off call after timeout
+        #self._cancelSched()
+
+        if self._switched_on:
+            return
+
+        if self._full_brightness_occupancy and not any(self.motion_disable_trackers.values()):
+            self.hass.async_create_task(self.async_turn_on(brightness=255, source="MotionSensor"))
+        elif self._occupancy and not any(self.motion_disable_trackers.values()):
+            self.hass.async_create_task(self.async_turn_on(brightness=self.motion_sensor_brightness, source="MotionSensor"))
+        else:
+            self.hass.async_create_task(self.async_turn_off(source="MotionSensor"))
+
     @callback
     async def motion_sensor_message_received(self, mqttmsg) -> None:
         """A new MQTT message has been received."""
@@ -1125,58 +1233,66 @@ class NewZoneLight(LightEntity):
 
         payload = json.loads(payload)
         z, ms = topic.split("/")
+        if self._debug:
+            _LOGGER.debug(f"{self.name} motion sensor: {topic}, {payload}, {qos}")
 
         if not ms in self._occupancies and not ms in self._full_brightness_occupancies:
             _LOGGER.error(f"{self.name}: Unexpected motion sensor name: {ms}")
             return
 
-        if ms in self.motion_sensors:
-            if self._occupancies[ms] == payload["occupancy"]:
-                # No change to state
-                return
-        else:
-            if self._full_brightness_occupancies[ms] == payload["occupancy"]:
-                # No change to state
-                return
+        if payload['occupancy'] == "on" or payload['occupancy'] == True:
+            await self.motion_sensor_on(ms)
 
-        if self._debug:
-            _LOGGER.error(f"{self.name} motion sensor: {topic}, {payload}, {qos}")
+#        # Do nothing if no change to state
+#        if ms in self.motion_sensors:
+#            if self._occupancies[ms] == payload["occupancy"]:
+#                return
+#        else:
+#            if self._full_brightness_occupancies[ms] == payload["occupancy"]:
+#                return
 
-        if ms in self.motion_sensors:
-            self._occupancies[ms] = payload["occupancy"]
-            self._occupancy = any(self._occupancies.values())
-        else:
-            self._full_brightness_occupancies[ms] = payload["occupancy"]
-            self._full_brightness_occupancy = any(self._full_brightness_occupancies.values())
+        # Only process 'on' events.  Off is handed by timeout
+##        if payload != 'on':
+##            return
 
-        if self._debug:
-            _LOGGER.debug(
-                f"{self.name} motion sensor: Occ: {self._occupancies} => {self._occupancy}"
-                f"{self.name} motion sensor: FBOcc: {self._full_brightness_occupancies} => {self._full_brightness_occupancy}"
-            )
 
-        # Disable motion sensor tracking if the lights are switched on or the harmony is on
-        # if self._switched_on or ((self.harmony_entity != None) and self._harmony_on):
-        #    return
+ ##       await self.motion_sensor_on(ms)
+#        if ms in self.motion_sensors:
+#            self._occupancies[ms] = payload["occupancy"]
+#            self._occupancy = any(self._occupancies.values())
+#        else:
+#            self._full_brightness_occupancies[ms] = payload["occupancy"]
+#            self._full_brightness_occupancy = any(self._full_brightness_occupancies.values())
+#
+#        if self._debug:
+#            _LOGGER.debug(
+#                f"{self.name} motion sensor: Occ: {self._occupancies} => {self._occupancy}"
+#                f"{self.name} motion sensor: FBOcc: {self._full_brightness_occupancies} => {self._full_brightness_occupancy}"
+#            )
+#
+#        # Disable motion sensor tracking if the lights are switched on or the harmony is on
+#        # if self._switched_on or ((self.harmony_entity != None) and self._harmony_on):
+#        #    return
+#
+#        # 3/10/24 - Moving this into the 'if' block below so turn_off still happens
+#        #if self._switched_on or any(self.motion_disable_trackers.values()):
+##        if self._switched_on:
+##            return
 
-        # 3/10/24 - Moving this into the 'if' block below so turn_off still happens
-        #if self._switched_on or any(self.motion_disable_trackers.values()):
-        if self._switched_on:
-            return
-
-        if self._occupancy or self._full_brightness_occupancy:
-            if any(self.motion_disable_trackers.values()):
-                return
-            if self._full_brightness_occupancy:
-                await self.async_turn_on(
-                    brightness=255, source="MotionSensor"
-                )
-            else:
-                await self.async_turn_on(
-                    brightness=self.motion_sensor_brightness, source="MotionSensor"
-                )
-        else:
-            await self.async_turn_off(source="MotionSensor")
+##        self.handle_motion_sensor_state()
+#        if self._occupancy or self._full_brightness_occupancy:
+#            if any(self.motion_disable_trackers.values()):
+#                return
+#            if self._full_brightness_occupancy:
+#                await self.async_turn_on(
+#                    brightness=255, source="MotionSensor"
+#                )
+#            else:
+#                await self.async_turn_on(
+#                    brightness=self.motion_sensor_brightness, source="MotionSensor"
+#                )
+#        else:
+#            await self.async_turn_off(source="MotionSensor")
 
     @callback
     async def motion_sensor_message_received_zha(self, ev) -> None:
@@ -1187,50 +1303,54 @@ class NewZoneLight(LightEntity):
         if self._debug:
             _LOGGER.debug(f"{self.name} motion sensor payload: {payload}")
 
-        payload = payload == "on"
+        #payload = payload == "on"
 
         if not dev in self._occupancies and not dev in self._full_brightness_occupancies:
             _LOGGER.error(f"{self.name}: Unexpected ZHA motion sensor name: {dev}")
             return
 
-        """A new MQTT message has been received."""
-        if dev in self.motion_sensors:
-            if self._occupancies[dev] == payload:
-                # No change to state
-                return
-        else:
-            if self._full_brightness_occupancies[dev] == payload:
-                # No change to state
-                return
+        if payload == "on":
+            await self.motion_sensor_on(dev)
+        
 
-        if dev in self.motion_sensors:
-            self._occupancies[dev] = payload
-            self._occupancy = any(self._occupancies.values())
-        else:
-            self._full_brightness_occupancies[dev] = payload
-            self._full_brightness_occupancy = any(self._full_brightness_occupancies.values())
-
-        if self._debug:
-            _LOGGER.debug(
-                f"{self.name} motion sensor: Occ: {self._occupancies} => {self._occupancy}"
-            )
-
-        # Disable motion sensor tracking if the lights are switched on a motion_disable_entity is on
-        # if self._switched_on or ((self.harmony_entity != None) and self._harmony_on):
-        #    return
-        if self._switched_on or any(self.motion_disable_trackers.values()):
-            return
-
-        if self._full_brightness_occupancy:
-            await self.async_turn_on(
-                brightness=255, source="MotionSensor"
-            )
-        elif self._occupancy:
-            await self.async_turn_on(
-                brightness=self.motion_sensor_brightness, source="MotionSensor"
-            )
-        else:
-            await self.async_turn_off(source="MotionSensor")
+#        """A new MQTT message has been received."""
+#        if dev in self.motion_sensors:
+#            if self._occupancies[dev] == payload:
+#                # No change to state
+#                return
+#        else:
+#            if self._full_brightness_occupancies[dev] == payload:
+#                # No change to state
+#                return
+#
+#        if dev in self.motion_sensors:
+#            self._occupancies[dev] = payload
+#            self._occupancy = any(self._occupancies.values())
+#        else:
+#            self._full_brightness_occupancies[dev] = payload
+#            self._full_brightness_occupancy = any(self._full_brightness_occupancies.values())
+#
+#        if self._debug:
+#            _LOGGER.debug(
+#                f"{self.name} motion sensor: Occ: {self._occupancies} => {self._occupancy}"
+#            )
+#
+#        # Disable motion sensor tracking if the lights are switched on a motion_disable_entity is on
+#        # if self._switched_on or ((self.harmony_entity != None) and self._harmony_on):
+#        #    return
+#        if self._switched_on or any(self.motion_disable_trackers.values()):
+#            return
+#
+#        if self._full_brightness_occupancy:
+#            await self.async_turn_on(
+#                brightness=255, source="MotionSensor"
+#            )
+#        elif self._occupancy:
+#            await self.async_turn_on(
+#                brightness=self.motion_sensor_brightness, source="MotionSensor"
+#            )
+#        else:
+#            await self.async_turn_off(source="MotionSensor")
 
     # @callback
     # async def harmony_update(self, this_event):
@@ -1247,17 +1367,17 @@ class NewZoneLight(LightEntity):
         """Track updates on motion_disable_entities"""
         ev = this_event.as_dict()
         if self._debug:
-            _LOGGER.debug(f"{self.name}: motion_disable_entitiy_update: {ev}")
+            _LOGGER.debug(f"{self.name}: motion_disable_entity_update: {ev}")
 
         ent = ev["data"]["entity_id"]
         ns = ev["data"]["new_state"].state
-        if ns == "on":
+        if ns == "on" or ns == "playing":
             self.motion_disable_trackers[ent] = True
         else:
             self.motion_disable_trackers[ent] = False
 
         if self._debug:
-            _LOGGER.debug(f"{self.name}: motion_disable_entitiy_update: {ev} => {self.motion_disable_trackers[ent]}")
+            _LOGGER.debug(f"{self.name}: motion_disable_entity_update: {ev} => {self.motion_disable_trackers[ent]}")
 
     @callback
     async def other_entity_update(self, this_event):

@@ -1,12 +1,12 @@
 {
     "on_hold": [
-        [ [ "RightLight", "light.theater_group", "Vivid" ],
-          [ "RightLight", "light.theater_ec_bars", "Vivid"] ],
-        [ [ "RightLight", "light.theater_group", "Bright"] ]
+        [ [ "RightLight", "light.theater_group", "Fun2" ],
+          [ "RightLight", "light.theater_ec_bars", "Fun2"],
+          [ "RightLight", "light.bar_group", "Fun2"] ]
     ],
     "on-hold": [
-        [ [ "RightLight", "light.theater_group", "Vivid"] ,
-          [ "RightLight", "light.theater_ec_bars", "Vivid"] ],
-        [ [ "RightLight", "light.theater_group", "Bright"] ]
+        [ [ "RightLight", "light.theater_group", "Fun2" ],
+          [ "RightLight", "light.theater_ec_bars", "Fun2"],
+          [ "RightLight", "light.bar_group", "Fun2"] ]
     ]
 }
