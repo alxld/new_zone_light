@@ -168,20 +168,6 @@ class RightLight:
             if self._debug:
                 self._logger.error(f"Final: {br}/{ct} -> {time_rem}sec")
 
-            # Define callback helpers
-            #async def set_color_temp(_):
-            #    if self._debug:
-            #        self._logger.error(f"set_color_temp start.  ct: {ct}")
-            #    await self._hass.services.async_call(
-            #        "light",
-            #        "turn_on",
-            #        {
-            #            "entity_id": self._entity,
-            #            "color_temp_kelvin": ct,
-            #        },
-            #        blocking=True,
-            #    )
-
             async def turn_on_now(_):
                 if self._debug:
                     self._logger.error(f"turn_on_now start.  br/ct: {br}/{ct}, transition: {this_transition}")
@@ -598,17 +584,6 @@ class RightLight:
             self.trip_points["Normal"].append([self.sunset,                          [3000, 255]])  # Sunset
             self.trip_points["Normal"].append([self.ten_thirty,                      [2700, 255]])  # 10:30
             self.trip_points["Normal"].append(self.trip_points["Normal"][0])  # Midnight night
-
-            #self.trip_points["Normal"].append([self.midnight_early, [2200, 38]])  # Midnight morning
-            #self.trip_points["Normal"].append([self.sunrise - timedelta(minutes=60), [2200, 38]])  # Sunrise - 60
-            #self.trip_points["Normal"].append([self.sunrise - timedelta(minutes=30), [2700, 170]])  # Sunrise - 30
-            #self.trip_points["Normal"].append([self.sunrise, [3200, 155]])  # Sunrise
-            #self.trip_points["Normal"].append([self.sunrise + timedelta(minutes=30), [4700, 255]])  # Sunrise + 30
-            #self.trip_points["Normal"].append([self.sunset - timedelta(minutes=90), [4200, 255]])  # Sunset - 90
-            #self.trip_points["Normal"].append([self.sunset - timedelta(minutes=30), [3200, 255]])  # Sunset = 30
-            #self.trip_points["Normal"].append([self.sunset, [3000, 255]])  # Sunset
-            #self.trip_points["Normal"].append([self.ten_thirty, [2700, 255]])  # 10:30
-            #self.trip_points["Normal"].append([self.midnight_late, [2500, 150]])  # Midnight night
 
         vivid_trip_points = [
             [255, 0, 0],

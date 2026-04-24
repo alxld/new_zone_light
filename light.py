@@ -79,7 +79,6 @@ CONF_ENTITIES_BELOW_THRESHOLD = "entities_below_threshold"
 CONF_ENTITIES_ABOVE_THRESHOLD = "entities_above_threshold"
 CONF_BRIGHTNESS_MULTIPLIER = "brightness_multiplier"
 CONF_BUTTON_MAP = "button_map"
-CONF_HAS_BUTTON_MAP = "has_button_map"
 CONF_DEBUG = "debug"
 CONF_DEBUG_RL = "debug_rl"
 
@@ -102,7 +101,6 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
         vol.Optional(CONF_OTHER_LIGHT_TRACKERS): cv.ensure_list,
         vol.Optional(CONF_TRACK_OTHER_LIGHT_OFF_EVENTS): cv.boolean,
         vol.Optional(CONF_BRIGHTNESS_MULTIPLIER): cv.ensure_list,
-        vol.Optional(CONF_HAS_BUTTON_MAP): cv.boolean,
         vol.Optional(CONF_DEBUG): cv.boolean,
         vol.Optional(CONF_DEBUG_RL): cv.boolean,
     }
@@ -175,8 +173,6 @@ def setup_platform(hass: HomeAssistant, config: ConfigType, async_add_entities: 
             for ent,br in entry.items():
                 temp_dict[ent] = br
         nzl.brightness_multiplier = temp_dict
-
-    nzl.has_button_map = config.get(CONF_HAS_BUTTON_MAP)
 
     async_add_entities([nzl])
     if nzl._debug:
@@ -461,7 +457,7 @@ class NewZoneLight(LightEntity):
     
     def _cancelSched(self, entity_id: str):
         if self._debug:
-            _LOGGER.error(f"{self.name} _cancelSched: {entity_id}")
+            _LOGGER.debug(f"{self.name} _cancelSched: {entity_id}")
         if entity_id in self._currSched and self._currSched[entity_id]:
             ret = self._currSched[entity_id]
             if callable(ret):
@@ -472,7 +468,7 @@ class NewZoneLight(LightEntity):
 
     def _addSched(self, entity_id, ret):
         if self._debug:
-            _LOGGER.error(f"{self.name} _addSched: {entity_id}")
+            _LOGGER.debug(f"{self.name} _addSched: {entity_id}")
         self._currSched[entity_id] = ret
 
     @property
@@ -522,26 +518,10 @@ class NewZoneLight(LightEntity):
         """Return the hue and saturation color value [float, float]."""
         return self._hs_color
 
-    #@property
-    #def color_temp(self) -> Optional[int]:
-    #    """Return the CT color value in mireds."""
-    #    return self._color_temp
-
     @property
     def color_temp_kelvin(self) -> Optional[int]:
         """Return the CT color value in kelvin."""
         return self._color_temp_kelvin
-
-    ## 3/23/2025 - deprecated
-    #@property
-    #def min_mireds(self) -> int:
-    #    """Return the coldest color_temp that this light group supports."""
-    #    return self._min_mireds
-    #
-    #@property
-    #def max_mireds(self) -> int:
-    #    """Return the warmest color_temp that this light group supports."""
-    #    return self._max_mireds
 
     @property
     def min_color_temp_kelvin(self) -> int:
@@ -558,22 +538,13 @@ class NewZoneLight(LightEntity):
         """Return the rgb color value [int, int, int]."""
         return self._rgb_color
 
-    ## 1/2/2025 - Deprecated - moving to only using supported_color_modes
-    #@property
-    #def supported_features(self) -> int:
-    #    """Flag supported features."""
-    #    return self._supported_features
-
-    #@property
-    #def supported_features(self) -> LightEntityFeature:
-    #    return LightEntityFeature.EFFECT | LightEntityFeature.TRANSITION
-
     @property
     def supported_color_modes(self) -> set[ColorMode] | set[str] | None:
         """Reports the supported color modes as required by HA"""
         return set([ColorMode.COLOR_TEMP, ColorMode.RGB])
 
     ## 3/23/2025 - deprecated
+    ## TODO: Look this up online and see what the right handling is.  I think the function is still needed.
     @property
     def color_mode(self) -> ColorMode:
         if self._curr_effect and self._curr_effect == "Normal":
@@ -632,15 +603,6 @@ class NewZoneLight(LightEntity):
             pass
         else:
             self._switched_on = True
-
-        #        if "source" in kwargs and kwargs["source"] == "Switch":
-        #            # Assume RightLight mode for all switch presses
-        #            rl = True
-        #        elif self._is_on == False:
-        #            # If light is off, default to RightLight mode (can be overriden with color/colortemp attributes)
-        #            rl = True
-        #        else:
-        #            rl = False
 
         # Always assume RightLight is enabled.  Will override based on ATTR_* inputs
         rl = True
@@ -713,23 +675,6 @@ class NewZoneLight(LightEntity):
             await self.entities_below_threshold[ent].disable()
         for ent in self.entities_above_threshold:
             await self.entities_above_threshold[ent].disable()
-
-        # No longer doing this assumption.  Need to explicitly use above and below threshold lists
-        ## Assume first entity if for below threhold if not explicitly set
-        #if len(self.entities_below_threshold) > 0:
-        #    b_ents = self.entities_below_threshold
-        #else:
-        #    b_ents = [f]
-        #
-        ## Assume all other entities are for above threhold if not explcitly set
-        #if len(self.entities_above_threshold) > 0:
-        #    a_ents = self.entities_above_threshold
-        #else:
-        #    if len(r) > 0:
-        #        # a_ents = [r[0]]
-        #        a_ents = r
-        #    else:
-        #        a_ents = []
 
         # Process non-threshold entities
         for ent in self.entities:
@@ -838,20 +783,6 @@ class NewZoneLight(LightEntity):
             await self.entities_below_threshold[ent].turn_on(mode=self._mode)
         for ent in self.entities_above_threshold:
             await self.entities_above_threshold[ent].turn_on(mode=self._mode)
-
-        #f, r = self.getEntityNames()
-        ## Disable RightLight for other entities before turning on main entity
-        #for ent in r:
-        #    await self.entities[ent].disable()
-        #for ent in self.entities_above_threshold:
-        #    await self.entities[ent].disable()
-        #for ent in self.entities_below_threshold:
-        #    await self.entities[ent].disable()
-        #if self._debug:
-        #    _LOGGER.debug(
-        #        f"{self.name} LIGHT ASYNC_TURN_ON_MODE turning on {f} to mode {self._mode}"
-        #    )
-        #await self.entities[f].turn_on(mode=self._mode)
 
         self.async_schedule_update_ha_state(force_refresh=True)
 
@@ -966,9 +897,6 @@ class NewZoneLight(LightEntity):
         self._color_temp_kelvin = state.attributes.get(ATTR_COLOR_TEMP_KELVIN, self._color_temp_kelvin)
         self._min_color_temp_kelvin = state.attributes.get(ATTR_MIN_COLOR_TEMP_KELVIN, self._min_color_temp_kelvin)
         self._max_color_temp_kelvin = state.attributes.get(ATTR_MAX_COLOR_TEMP_KELVIN, self._max_color_temp_kelvin)
-        #self._min_mireds = state.attributes.get(ATTR_MIN_MIREDS, 154)
-        #self._max_mireds = state.attributes.get(ATTR_MAX_MIREDS, 500)
-        # self._effect_list = state.attributes.get(ATTR_EFFECT_LIST)
 
         # Reload JSON buttonmap regularly
         if os.path.exists(self._button_map_file):
@@ -1021,7 +949,7 @@ class NewZoneLight(LightEntity):
                 self._switched_on = True
 
                 if self._debug:
-                    _LOGGER.error(f"{self.name} JSON Switch command: {command}")
+                    _LOGGER.debug(f"{self.name} JSON Switch command: {command}")
                 if command[0] == "Brightness":
                     ent = command[1]
                     br = command[2]
@@ -1088,73 +1016,11 @@ class NewZoneLight(LightEntity):
             await self.async_turn_off(source="Switch")
         else:
             if self._debug:
-                _LOGGER.error(f"{self.name} switch handler fail: {payload}")
+                _LOGGER.debug(f"{self.name} switch handler fail: {payload}")
 
     def clearButtonCounts(self):
         for key in self._buttonCounts.keys():
             self._buttonCounts[key] = 0
-
-    #    @callback
-    #    async def json_switch_message_received(
-    #        self, topic: str, payload: str, qos: int
-    #    ) -> None:
-    #        """A new MQTT message has been received."""
-    #        if payload in self._button_map_data.keys():
-    #            config_list = self._button_map_data[payload]
-    #            this_list = config_list[self._buttonCounts[payload]]
-    #
-    #            # Increment button count and loop to zero.  Zero out the rest
-    #            self._buttonCounts[payload] += 1
-    #            if self._buttonCounts[payload] >= len(config_list):
-    #                self._buttonCounts[payload] = 0
-    #            for key in self._buttonCounts.keys():
-    #                if key != payload:
-    #                    self._buttonCounts[key] = 0
-    #
-    #            for command in this_list:
-    #                if self._debug:
-    #                    _LOGGER.error(f"{self.name} JSON Switch command: {command}")
-    #                if command[0] == "Brightness":
-    #                    ent = command[1]
-    #                    br = command[2]
-    #
-    #                    if br == 0:
-    #                        await self.hass.services.async_call(
-    #                            "light", "turn_off", {"entity_id": ent}
-    #                        )
-    #                    else:
-    #                        await self.hass.services.async_call(
-    #                            "light", "turn_on", {"entity_id": ent, "brightness": br}
-    #                        )
-    #                elif command[0] == "RightLight":
-    #                    ent = command[1]
-    #                    val = command[2]
-    #
-    #                    if not ent in self.entities:
-    #                        self.entities[ent] = RightLight(ent, self.hass, self._debug_rl)
-    #                        # _LOGGER.error(f"{self.name} error: Unknown entity '{ent}' in button_map.json.  Should be one of: {self.entities.keys()}")
-    #                        # continue
-    #
-    #                    rl = self.entities[ent]
-    #
-    #                    if val == "Disable":
-    #                        await rl.disable()
-    #                    elif val in rl.getColorModes():
-    #                        await rl.turn_on(mode=val)
-    #                    elif (val == 0) or (val == "Off"):
-    #                        await rl.disable_and_turn_off()
-    #                    else:
-    #                        await rl.turn_on(brightness=val, brightness_override=0)
-    #                elif command[0] == "Scene":
-    #                    if self._debug:
-    #                        _LOGGER.error(f"{self.name} JSON Switch Scene: {command[1]}")
-    #                    await self.hass.services.async_call(
-    #                        "scene", "turn_on", {"entity_id": command[1]}
-    #                    )
-    #                else:
-    #                    _LOGGER.error(
-    #                        f"{self.name} error - unrecognized button_map.json command type: {command[0]}"
-    #                    )
 
     async def motion_sensor_on(self, entity_id: str) -> None:
         """Set motion sensor to 'on' state"""
@@ -1243,57 +1109,6 @@ class NewZoneLight(LightEntity):
         if payload['occupancy'] == "on" or payload['occupancy'] == True:
             await self.motion_sensor_on(ms)
 
-#        # Do nothing if no change to state
-#        if ms in self.motion_sensors:
-#            if self._occupancies[ms] == payload["occupancy"]:
-#                return
-#        else:
-#            if self._full_brightness_occupancies[ms] == payload["occupancy"]:
-#                return
-
-        # Only process 'on' events.  Off is handed by timeout
-##        if payload != 'on':
-##            return
-
-
- ##       await self.motion_sensor_on(ms)
-#        if ms in self.motion_sensors:
-#            self._occupancies[ms] = payload["occupancy"]
-#            self._occupancy = any(self._occupancies.values())
-#        else:
-#            self._full_brightness_occupancies[ms] = payload["occupancy"]
-#            self._full_brightness_occupancy = any(self._full_brightness_occupancies.values())
-#
-#        if self._debug:
-#            _LOGGER.debug(
-#                f"{self.name} motion sensor: Occ: {self._occupancies} => {self._occupancy}"
-#                f"{self.name} motion sensor: FBOcc: {self._full_brightness_occupancies} => {self._full_brightness_occupancy}"
-#            )
-#
-#        # Disable motion sensor tracking if the lights are switched on or the harmony is on
-#        # if self._switched_on or ((self.harmony_entity != None) and self._harmony_on):
-#        #    return
-#
-#        # 3/10/24 - Moving this into the 'if' block below so turn_off still happens
-#        #if self._switched_on or any(self.motion_disable_trackers.values()):
-##        if self._switched_on:
-##            return
-
-##        self.handle_motion_sensor_state()
-#        if self._occupancy or self._full_brightness_occupancy:
-#            if any(self.motion_disable_trackers.values()):
-#                return
-#            if self._full_brightness_occupancy:
-#                await self.async_turn_on(
-#                    brightness=255, source="MotionSensor"
-#                )
-#            else:
-#                await self.async_turn_on(
-#                    brightness=self.motion_sensor_brightness, source="MotionSensor"
-#                )
-#        else:
-#            await self.async_turn_off(source="MotionSensor")
-
     @callback
     async def motion_sensor_message_received_zha(self, ev) -> None:
         if self._debug:
@@ -1312,56 +1127,6 @@ class NewZoneLight(LightEntity):
         if payload == "on":
             await self.motion_sensor_on(dev)
         
-
-#        """A new MQTT message has been received."""
-#        if dev in self.motion_sensors:
-#            if self._occupancies[dev] == payload:
-#                # No change to state
-#                return
-#        else:
-#            if self._full_brightness_occupancies[dev] == payload:
-#                # No change to state
-#                return
-#
-#        if dev in self.motion_sensors:
-#            self._occupancies[dev] = payload
-#            self._occupancy = any(self._occupancies.values())
-#        else:
-#            self._full_brightness_occupancies[dev] = payload
-#            self._full_brightness_occupancy = any(self._full_brightness_occupancies.values())
-#
-#        if self._debug:
-#            _LOGGER.debug(
-#                f"{self.name} motion sensor: Occ: {self._occupancies} => {self._occupancy}"
-#            )
-#
-#        # Disable motion sensor tracking if the lights are switched on a motion_disable_entity is on
-#        # if self._switched_on or ((self.harmony_entity != None) and self._harmony_on):
-#        #    return
-#        if self._switched_on or any(self.motion_disable_trackers.values()):
-#            return
-#
-#        if self._full_brightness_occupancy:
-#            await self.async_turn_on(
-#                brightness=255, source="MotionSensor"
-#            )
-#        elif self._occupancy:
-#            await self.async_turn_on(
-#                brightness=self.motion_sensor_brightness, source="MotionSensor"
-#            )
-#        else:
-#            await self.async_turn_off(source="MotionSensor")
-
-    # @callback
-    # async def harmony_update(self, this_event):
-    #    """Track harmony updates"""
-    #    ev = this_event.as_dict()
-    #    ns = ev["data"]["new_state"].state
-    #    if ns == "on":
-    #        self._harmony_on = True
-    #    else:
-    #        self._harmony_on = False
-
     @callback
     async def motion_disable_entity_update(self, this_event):
         """Track updates on motion_disable_entities"""
@@ -1384,7 +1149,7 @@ class NewZoneLight(LightEntity):
         """Track events of other entities"""
         ev = this_event.as_dict()
         if self._debug:
-            _LOGGER.error(f"{self.name} other entity update: {ev}")
+            _LOGGER.debug(f"{self.name} other entity update: {ev}")
 
         ent = ev["data"]["entity_id"]
         ns = ev["data"]["new_state"].state
