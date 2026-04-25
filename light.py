@@ -1,7 +1,7 @@
 """Platform for light integration"""
 from __future__ import annotations
-from collections import OrderedDict
-from homeassistant.helpers.event import async_call_later
+from datetime import timedelta
+from homeassistant.helpers.event import async_call_later, async_track_time_interval
 
 ## TODO: Pull rgb_color property from RightLight (or any on entity)
 ## TODO: Look ingo rgbw_color/rgbww_color.  Need to use ColorMode.RGBW/RGBWW.
@@ -47,7 +47,7 @@ from homeassistant.const import (  # ATTR_SUPPORTED_FEATURES,; CONF_ENTITY_ID,; 
 
 # from enum import Enum
 import homeassistant.helpers.config_validation as cv
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import event
 from homeassistant.helpers.entity import generate_entity_id
 from homeassistant.util import slugify
@@ -113,7 +113,7 @@ async def async_setup_platform(hass: HomeAssistant, config: ConfigType, async_ad
     nzl = NewZoneLight(config.get(CONF_NAME), unique_id=config.get(CONF_UNIQUE_ID), debug=config.get(CONF_DEBUG, False), debug_rl=config.get(CONF_DEBUG_RL, False))
 
     if config.get(CONF_ENTITIES):
-        temp_dict = OrderedDict()
+        temp_dict = {}
         for ent in config.get(CONF_ENTITIES):
             temp_dict[ent] = None
         nzl.entities = temp_dict
@@ -140,10 +140,9 @@ async def async_setup_platform(hass: HomeAssistant, config: ConfigType, async_ad
             temp_dict[ent] = None
         nzl.entities_above_threshold = temp_dict
 
-    if nzl._debug:
-        _LOGGER.debug(f"{nzl.name}: Normal entities: {nzl.entities}")
-        _LOGGER.debug(f"{nzl.name}: Below threshold entities: {nzl.entities_below_threshold}")
-        _LOGGER.debug(f"{nzl.name}: Above threshold entities: {nzl.entities_above_threshold}")
+    _LOGGER.debug(f"{nzl.name}: Normal entities: {nzl.entities}")
+    _LOGGER.debug(f"{nzl.name}: Below threshold entities: {nzl.entities_below_threshold}")
+    _LOGGER.debug(f"{nzl.name}: Above threshold entities: {nzl.entities_above_threshold}")
 
     nzl.has_brightness_threshold = config.get(CONF_HAS_BRIGHTNESS_THRESHOLD)
     if config.get(CONF_MOTION_SENSORS):
@@ -155,7 +154,7 @@ async def async_setup_platform(hass: HomeAssistant, config: ConfigType, async_ad
     if config.get(CONF_MOTION_SENSOR_BRIGHTNESS):
         nzl.motion_sensor_brightness = config.get(CONF_MOTION_SENSOR_BRIGHTNESS)
     if config.get(CONF_OTHER_LIGHT_TRACKERS):
-        temp_dict = OrderedDict()
+        temp_dict = {}
         for entry in config.get(CONF_OTHER_LIGHT_TRACKERS):
             for ent, br in entry.items():
                 temp_dict[ent] = br
@@ -169,19 +168,21 @@ async def async_setup_platform(hass: HomeAssistant, config: ConfigType, async_ad
         nzl.motion_sensor_timeout = config.get(CONF_MOTION_SENSOR_TIMEOUT)
 
     if config.get(CONF_BRIGHTNESS_MULTIPLIER):
-        temp_dict = OrderedDict()
+        temp_dict = {}
         for entry in config.get(CONF_BRIGHTNESS_MULTIPLIER):
             for ent,br in entry.items():
                 temp_dict[ent] = br
         nzl.brightness_multiplier = temp_dict
 
     async_add_entities([nzl])
-    if nzl._debug:
-        _LOGGER.debug(f"{nzl.name}: Done")
+    _LOGGER.debug(f"{nzl.name}: Done")
 
 
 class NewZoneLight(LightEntity):
     """New Light Super Class"""
+
+    _attr_supported_features = LightEntityFeature.EFFECT | LightEntityFeature.TRANSITION
+    _attr_supported_color_modes = {ColorMode.COLOR_TEMP, ColorMode.RGB}
 
     def __init__(self, name, unique_id=None, domain="new_zone_light", debug=False, debug_rl=False) -> None:
         """Initialize NewLight Super Class."""
@@ -194,7 +195,7 @@ class NewZoneLight(LightEntity):
         # Store callback for cancelling scheduled next event per motion sensor
         self._currSched = {}
 
-        self.entities = OrderedDict()
+        self.entities = {}
         """Dictionary of entities.  Each will be a rightlight object and be addressable from the json buttonmap.  The first
         added entity will be the default entity for this light.  The second entity will be used for above brightness threshold."""
 
@@ -264,19 +265,19 @@ class NewZoneLight(LightEntity):
         self._name = name
         """Name of this object"""
 
-        self._brightness = 0
-        """Light's current brightness"""
+        self._brightness: int | None = None
+        """Light's current brightness (None when off, per HA convention)."""
         self._brightnessBT = 0
         """Light's current below-threhold brightness (i.e. first entity brightness)"""
         self._brightnessAT = 0
         """Light's current above-threhold brightness (i.e. second entity brightness)"""
         self._brightness_override = 0
         """Allow brightness above 255 (for going brighter than RightLight default)"""
-        self._hs_color: Optional[Tuple[float, float]] = None
+        self._hs_color: tuple[float, float] | None = None
         """Light's current color in hs"""
-        self._color_temp_kelvin: Optional[int] = None
+        self._color_temp_kelvin: int | None = None
         """Light's current color in Kelvin"""
-        self._rgb_color: Optional[Tuple[int, int, int]] = None
+        self._rgb_color: tuple[int, int, int] | None = None
         """Light's current color in RGB"""
         #self._min_mireds: int = 154
         #"""Light's minimum supported mireds"""
@@ -288,6 +289,9 @@ class NewZoneLight(LightEntity):
         """Light's maximum supported kelvin"""
         self._mode = "Off"
         """Light's current mode"""
+        self._color_mode: ColorMode = ColorMode.COLOR_TEMP
+        """Active color mode reported to HA. Updated whenever turn_on resolves
+        a specific color temp or RGB target."""
         self._is_on = False
         """Boolean to show if light is on"""
         self._available = True
@@ -305,7 +309,7 @@ class NewZoneLight(LightEntity):
         self._unique_id = unique_id or f"new_zone_light_{slugify(name)}"
         """Stable unique identifier for HA's entity registry"""
         # self._white_value: Optional[int] = None
-        self._effect_list: Optional[List[str]] = None
+        self._effect_list: list[str] | None = None
         """A list of supported effects"""
         #self._curr_effect = "Normal"
         self._curr_effect = EFFECT_OFF
@@ -361,16 +365,18 @@ class NewZoneLight(LightEntity):
         self._others = {}
         """Dictionary of states of other lights being tracked"""
 
-        if self._debug:
-            _LOGGER.info(f"{self.name} Light initialized")
+        self._unsubs: list = []
+        """List of unsubscribe callables for MQTT/event subscriptions, drained
+        in async_will_remove_from_hass to avoid leaks on entity removal."""
+
+        _LOGGER.debug(f"{self.name} Light initialized")
 
     async def async_added_to_hass(self) -> None:
         """Initialize light objects"""
 
         # Start with all motion sensor states as off
         for ms in self.motion_sensors:
-            if self._debug:
-                _LOGGER.info(f"{self.name} motion sensor: {ms}")
+            _LOGGER.debug(f"{self.name} motion sensor: {ms}")
             if '/' in ms:
                 this_ms = re.match(r"^zigbee2mqtt.*/([^\/]+)", ms).group(1)
                 self._occupancies[this_ms] = False
@@ -405,27 +411,35 @@ class NewZoneLight(LightEntity):
         if self.switch != None:
             if ":" in self.switch:
                 # ZHA type switch
-                self.hass.bus.async_listen("zha_event", self.switch_message_received)
+                self._unsubs.append(
+                    self.hass.bus.async_listen("zha_event", self.switch_message_received)
+                )
             else:
                 # Zigbee2mqtt type switch
                 if "/" in self.switch:
                     switch_action = f"{self.switch}/action"
                 else:
                     switch_action = f"zigbee2mqtt/{self.switch}/action"
-                await mqtt.async_subscribe(self.hass, switch_action, self.switch_message_received)
+                self._unsubs.append(
+                    await mqtt.async_subscribe(self.hass, switch_action, self.switch_message_received)
+                )
 
         # Subscribe to motion sensor events
         for ms in self.motion_sensors + self.full_brightness_motion_sensors:
             if "binary_sensor" in ms:
-                event.async_track_state_change_event(
-                    self.hass, ms, self.motion_sensor_message_received_zha
+                self._unsubs.append(
+                    event.async_track_state_change_event(
+                        self.hass, ms, self.motion_sensor_message_received_zha
+                    )
                 )
             else:
                 if "/" in ms:
                     action = ms
                 else:
                     action = f"zigbee2mqtt/{ms}"
-                await mqtt.async_subscribe(self.hass, action, self.motion_sensor_message_received)
+                self._unsubs.append(
+                    await mqtt.async_subscribe(self.hass, action, self.motion_sensor_message_received)
+                )
 
         # if self.has_motion_sensor:
         #    await self.hass.components.mqtt.async_subscribe(
@@ -440,21 +454,85 @@ class NewZoneLight(LightEntity):
 
         # Subscribe to motion_disable_entities events
         for ent in self.motion_disable_entities:
-            if self._debug:
-                _LOGGER.debug(f"{self.name} motion_disable_entity added: {ent}")
-            event.async_track_state_change_event(self.hass, ent, self.motion_disable_entity_update)
+            _LOGGER.debug(f"{self.name} motion_disable_entity added: {ent}")
+            self._unsubs.append(
+                event.async_track_state_change_event(self.hass, ent, self.motion_disable_entity_update)
+            )
 
         # Subscribe to other entity events
         for ent in self.other_light_trackers.keys():
-            event.async_track_state_change_event(
-                self.hass, ent, self.other_entity_update
+            self._unsubs.append(
+                event.async_track_state_change_event(
+                    self.hass, ent, self.other_entity_update
+                )
             )
 
-        self.async_schedule_update_ha_state(force_refresh=True)
+        # Push-based color/brightness tracking: watch the first underlying
+        # entity for state changes so we can mirror its color attributes
+        # without polling.
+        f, _r = self.getEntityNames() if (self.entities or self.entities_above_threshold or self.entities_below_threshold) else (None, None)
+        if f:
+            self._unsubs.append(
+                event.async_track_state_change_event(
+                    self.hass, f, self._underlying_state_changed
+                )
+            )
+
+        # Periodic button-map reload (replaces the on-poll reload that lived
+        # in async_update). 60s is plenty for a config file.
+        self._unsubs.append(
+            async_track_time_interval(
+                self.hass, self._async_reload_button_map, timedelta(seconds=60)
+            )
+        )
+        # Run once now so the map is available immediately.
+        await self._async_reload_button_map()
+
+        self.async_write_ha_state()
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Drain subscriptions registered in async_added_to_hass."""
+        while self._unsubs:
+            unsub = self._unsubs.pop()
+            try:
+                if callable(unsub):
+                    unsub()
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.debug(f"{self.name} unsub failed: {err}")
+
+    @callback
+    def _underlying_state_changed(self, ev) -> None:
+        """Mirror color attributes from the first underlying entity."""
+        new_state = ev.data.get("new_state")
+        if new_state is None:
+            return
+        attrs = new_state.attributes
+        self._hs_color = attrs.get(ATTR_HS_COLOR, self._hs_color)
+        self._rgb_color = attrs.get(ATTR_RGB_COLOR, self._rgb_color)
+        self._color_temp_kelvin = attrs.get(ATTR_COLOR_TEMP_KELVIN, self._color_temp_kelvin)
+        self._min_color_temp_kelvin = attrs.get(ATTR_MIN_COLOR_TEMP_KELVIN, self._min_color_temp_kelvin)
+        self._max_color_temp_kelvin = attrs.get(ATTR_MAX_COLOR_TEMP_KELVIN, self._max_color_temp_kelvin)
+        self.async_write_ha_state()
+
+    async def _async_reload_button_map(self, _now=None) -> None:
+        """Reload the JSON button map if its mtime has advanced."""
+        if not os.path.exists(self._button_map_file):
+            return
+        ts = os.path.getmtime(self._button_map_file)
+        if ts <= self._button_map_timestamp:
+            return
+        _LOGGER.debug(f"{self.name} loading JSON button map file")
+
+        def loadJSON():
+            with open(self._button_map_file) as fh:
+                return json.load(fh)
+
+        loop = asyncio.get_running_loop()
+        self._button_map_data = await loop.run_in_executor(None, loadJSON)
+        self._button_map_timestamp = ts
     
     def _cancelSched(self, entity_id: str):
-        if self._debug:
-            _LOGGER.debug(f"{self.name} _cancelSched: {entity_id}")
+        _LOGGER.debug(f"{self.name} _cancelSched: {entity_id}")
         if entity_id in self._currSched and self._currSched[entity_id]:
             ret = self._currSched[entity_id]
             if callable(ret):
@@ -464,14 +542,14 @@ class NewZoneLight(LightEntity):
             self._currSched[entity_id] = None
 
     def _addSched(self, entity_id, ret):
-        if self._debug:
-            _LOGGER.debug(f"{self.name} _addSched: {entity_id}")
+        _LOGGER.debug(f"{self.name} _addSched: {entity_id}")
         self._currSched[entity_id] = ret
 
     @property
-    def should_poll(self):
-        """Allows for color updates to be polled"""
-        return True
+    def should_poll(self) -> bool:
+        """Push-based: state is updated via the underlying-entity listener
+        and a periodic button-map reload, so HA never needs to poll us."""
+        return False
 
     @property
     def name(self) -> str:
@@ -485,15 +563,12 @@ class NewZoneLight(LightEntity):
 
     @property
     def device_info(self):
-        prop = {
-            "identifiers": {
-                # Serial numbers are unique identifiers within a specific domain
-                (self.name, self.unique_id)
-            },
+        return {
+            # (DOMAIN, unique_id) — required tuple shape for device registry
+            "identifiers": {("new_zone_light", self._unique_id)},
             "name": self.name,
             "manufacturer": "Aaron",
         }
-        return prop
 
     @property
     def unique_id(self):
@@ -506,17 +581,17 @@ class NewZoneLight(LightEntity):
         return self._available
 
     @property
-    def brightness(self) -> Optional[int]:
+    def brightness(self) -> int | None:
         """Return the brightness of this light between 0..255."""
         return self._brightness
 
     @property
-    def hs_color(self) -> Optional[Tuple[float, float]]:
+    def hs_color(self) -> tuple[float, float] | None:
         """Return the hue and saturation color value [float, float]."""
         return self._hs_color
 
     @property
-    def color_temp_kelvin(self) -> Optional[int]:
+    def color_temp_kelvin(self) -> int | None:
         """Return the CT color value in kelvin."""
         return self._color_temp_kelvin
 
@@ -536,45 +611,33 @@ class NewZoneLight(LightEntity):
         return self._rgb_color
 
     @property
-    def supported_color_modes(self) -> set[ColorMode] | set[str] | None:
-        """Reports the supported color modes as required by HA"""
-        return set([ColorMode.COLOR_TEMP, ColorMode.RGB])
-
-    ## 3/23/2025 - deprecated
-    ## TODO: Look this up online and see what the right handling is.  I think the function is still needed.
-    @property
     def color_mode(self) -> ColorMode:
-        if self._curr_effect and self._curr_effect == "Normal":
-            return ColorMode.COLOR_TEMP
-        else:
-            return ColorMode.RGB
-            #return ColorMode.ONOFF
+        """Return the active color mode, tracked explicitly in _color_mode."""
+        return self._color_mode
 
     @property
     def effect(self):
-        if self._debug:
-            _LOGGER.debug(f"{self.name} effect current: {self._curr_effect}")
+        _LOGGER.debug(f"{self.name} effect current: {self._curr_effect}")
         return self._curr_effect
         # return "Normal"
 
     @property
     def effect_list(self) -> list[str] | None:
         """Return the RightLight modes are effect options"""
-        if self._debug:
-            _LOGGER.debug(f"{self.name} effect_list: {self._effect_list}")
+        _LOGGER.debug(f"{self.name} effect_list: {self._effect_list}")
         return self._effect_list
 
     async def async_turn_on(self, **kwargs) -> None:
         """Instruct the light to turn on."""
-        if self._debug:
-            _LOGGER.debug(f"{self.name} LIGHT ASYNC_TURN_ON: {kwargs}")
+        _LOGGER.debug(f"{self.name} LIGHT ASYNC_TURN_ON: {kwargs}")
 
         self._is_on = True
         self._mode = "On"
 
         if "brightness" in kwargs:
             self._brightness = kwargs["brightness"]
-        elif self._brightness == 0:
+        elif not self._brightness:
+            # None (off) or 0 → default to full
             self._brightness = 255
 
         #if self.has_brightness_threshold:
@@ -591,9 +654,8 @@ class NewZoneLight(LightEntity):
                     255 * (self._brightness) / (self.brightness_threshold)
                 )
                 self._brightnessAT = 0
-            if self._debug:
-                _LOGGER.debug( f"{self.name} LIGHT ASYNC_TURN_ON: BT: {self._brightnessBT}, AT: {self._brightnessAT}")
-                _LOGGER.debug( f"{self.name} LIGHT ASYNC_TURN_ON: Entities: {self.entities.keys()}")
+            _LOGGER.debug( f"{self.name} LIGHT ASYNC_TURN_ON: BT: {self._brightnessBT}, AT: {self._brightnessAT}")
+            _LOGGER.debug( f"{self.name} LIGHT ASYNC_TURN_ON: Entities: {self.entities.keys()}")
 
         # Assume switched on for anything other than motion sensor sources
         if "source" in kwargs and kwargs["source"] == "MotionSensor":
@@ -660,8 +722,18 @@ class NewZoneLight(LightEntity):
             rlmode = "Normal"
         self._curr_effect = rlmode
 
-        if self._debug:
-            _LOGGER.debug(f"{self.name} LIGHT ASYNC_TURN_ON: Data: {data}")
+        # Resolve the active color mode based on what's actually being applied.
+        # RightLight "Normal" is circadian color-temp; other modes are RGB-based.
+        # When rl=False, defer to the explicit attribute the caller provided.
+        if rl:
+            self._color_mode = ColorMode.COLOR_TEMP if rlmode == "Normal" else ColorMode.RGB
+        else:
+            if ATTR_COLOR_TEMP_KELVIN in kwargs:
+                self._color_mode = ColorMode.COLOR_TEMP
+            elif ATTR_RGB_COLOR in kwargs or ATTR_HS_COLOR in kwargs:
+                self._color_mode = ColorMode.RGB
+
+        _LOGGER.debug(f"{self.name} LIGHT ASYNC_TURN_ON: Data: {data}")
 
         #f, r = self.getEntityNames()
 
@@ -682,8 +754,7 @@ class NewZoneLight(LightEntity):
                 else:
                     thisbr = self._brightness
 
-                if self._debug:
-                    _LOGGER.debug( f"{self.name} LIGHT ASYNC_TURN_ON: NT RL turning on {ent}")
+                _LOGGER.debug( f"{self.name} LIGHT ASYNC_TURN_ON: NT RL turning on {ent}")
 
                 await self.entities[ent].turn_on(
                     brightness=thisbr,
@@ -693,8 +764,7 @@ class NewZoneLight(LightEntity):
                 )
             else:
                 # Use for other modes, like specific color or temperatures
-                if self._debug:
-                    _LOGGER.debug( f"{self.name} LIGHT ASYNC_TURN_ON: NT RL_specific turning on {ent}")
+                _LOGGER.debug( f"{self.name} LIGHT ASYNC_TURN_ON: NT RL_specific turning on {ent}")
                 await self.entities[ent].turn_on_specific(data)
 
 
@@ -707,8 +777,7 @@ class NewZoneLight(LightEntity):
                 else:
                     thisbr = self._brightnessBT
 
-                if self._debug:
-                    _LOGGER.debug( f"{self.name} LIGHT ASYNC_TURN_ON: BT RL turning on {ent}")
+                _LOGGER.debug( f"{self.name} LIGHT ASYNC_TURN_ON: BT RL turning on {ent}")
 
                 await self.entities_below_threshold[ent].turn_on(
                     brightness=thisbr,
@@ -718,8 +787,7 @@ class NewZoneLight(LightEntity):
                 )
             else:
                 # Use for other modes, like specific color or temperatures
-                if self._debug:
-                    _LOGGER.debug( f"{self.name} LIGHT ASYNC_TURN_ON: BT RL_specific turning on {ent}")
+                _LOGGER.debug( f"{self.name} LIGHT ASYNC_TURN_ON: BT RL_specific turning on {ent}")
                 await self.entities_below_threshold[ent].turn_on_specific(data)
 
         # Process above-threshold entities
@@ -728,8 +796,7 @@ class NewZoneLight(LightEntity):
             if rl:
                 # Turn on next entity using RightLight
                 if self._brightnessAT == 0:
-                    if self._debug:
-                        _LOGGER.debug( f"{self.name} LIGHT ASYNC_TURN_ON: AT RL turning off {ent}")
+                    _LOGGER.debug( f"{self.name} LIGHT ASYNC_TURN_ON: AT RL turning off {ent}")
                     await self.entities_above_threshold[ent].disable_and_turn_off()
                 else:
                     if ent in self.brightness_multiplier:
@@ -739,8 +806,7 @@ class NewZoneLight(LightEntity):
                     else:
                         thisbr = self._brightnessAT
 
-                    if self._debug:
-                        _LOGGER.debug( f"{self.name} LIGHT ASYNC_TURN_ON: AT RL turning on {ent}")
+                    _LOGGER.debug( f"{self.name} LIGHT ASYNC_TURN_ON: AT RL turning on {ent}")
                     await self.entities_above_threshold[ent].turn_on(
                         brightness=thisbr,
                         brightness_override=self._brightness_override,
@@ -749,11 +815,10 @@ class NewZoneLight(LightEntity):
                     )
             else:
                 # Use for other modes, like specific color or temperatures
-                if self._debug:
-                    _LOGGER.debug( f"{self.name} LIGHT ASYNC_TURN_ON: AT RL_specific turning on {ent}")
+                _LOGGER.debug( f"{self.name} LIGHT ASYNC_TURN_ON: AT RL_specific turning on {ent}")
                 await self.entities_above_threshold[ent].turn_on_specific(data)
 
-        self.async_schedule_update_ha_state(force_refresh=True)
+        self.async_write_ha_state()
 
     def getEntityNames(self):
         """Split entity key list into first (default) and rest list"""
@@ -767,12 +832,13 @@ class NewZoneLight(LightEntity):
             k = list(self.entities_below_threshold.keys())
             return k[0], (k[1:]) + list(self.entities_above_threshold.keys())
 
-    async def async_turn_on_mode(self, **kwargs: Any) -> None:
+    async def async_turn_on_mode(self, **kwargs) -> None:
         """Turn on one of RightLight's color modes"""
         self._mode = kwargs.get("mode", "Vivid")
         self._is_on = True
         self._brightness = 255
         self._switched_on = True
+        self._color_mode = ColorMode.RGB
 
         for ent in self.entities:
             await self.entities[ent].turn_on(mode=self._mode)
@@ -781,24 +847,21 @@ class NewZoneLight(LightEntity):
         for ent in self.entities_above_threshold:
             await self.entities_above_threshold[ent].turn_on(mode=self._mode)
 
-        self.async_schedule_update_ha_state(force_refresh=True)
+        self.async_write_ha_state()
 
-    async def async_turn_off(self, **kwargs: Any) -> None:
+    async def async_turn_off(self, **kwargs) -> None:
         """Instruct the light to turn off, conditionally."""
         self._occupancy = any(self._occupancies.values())
         self._full_brightness_occupancy = any(self._full_brightness_occupancies.values())
 
-        if self._debug:
-            _LOGGER.debug(f"{self.name} LIGHT ASYNC_TURN_OFF: {kwargs, self._switched_on, self._occupancy, self._full_brightness_occupancy}")
+        _LOGGER.debug(f"{self.name} LIGHT ASYNC_TURN_OFF: {kwargs, self._switched_on, self._occupancy, self._full_brightness_occupancy}")
 
         # If the light wasn't switched on, or if there is no occupancy, turn off
         if (self._switched_on == False) or (self._occupancy == False):
-            if self._debug:
-                _LOGGER.debug(f"{self.name} LIGHT ASYNC_TURN_OFF: Turning off")
+            _LOGGER.debug(f"{self.name} LIGHT ASYNC_TURN_OFF: Turning off")
             await self._async_turn_off_helper(**kwargs)
         elif self._occupancy or self._full_brightness_occupancy:
-            if self._debug:
-                _LOGGER.debug(f"{self.name} LIGHT ASYNC_TURN_OFF: Switching to motion sensor mode")
+            _LOGGER.debug(f"{self.name} LIGHT ASYNC_TURN_OFF: Switching to motion sensor mode")
             self._switched_on = False
 
             # Turn off if motion disable entities are on, otherwise switch to motion sensor mode
@@ -810,9 +873,9 @@ class NewZoneLight(LightEntity):
                 else:
                     await self.async_turn_on(brightness=self.motion_sensor_brightness, source="MotionSensor")
 
-    async def _async_turn_off_helper(self, **kwargs: Any) -> None:
+    async def _async_turn_off_helper(self, **kwargs) -> None:
         """Instruct the light to turn off."""
-        self._brightness = 0
+        self._brightness = None
         self._brightness_override = 0
         self._is_on = False
         self._switched_on = False
@@ -836,16 +899,15 @@ class NewZoneLight(LightEntity):
         # Disable other entities before turning off main entity
         #for ent in r:
         for ent in self.entities:
-            if self._debug:
-                _LOGGER.debug(
-                    f"{self.name} LIGHT ASYNC_TURN_OFF_HELPER turning off {ent}"
-                )
+            _LOGGER.debug(
+                f"{self.name} LIGHT ASYNC_TURN_OFF_HELPER turning off {ent}"
+            )
             await self.entities[ent].disable_and_turn_off(**kwargs)
         #if self._debug:
         #    _LOGGER.debug(f"{self.name} LIGHT ASYNC_TURN_OFF_HELPER turning off {f}")
         #await self.entities[f].disable_and_turn_off(**kwargs)
 
-        self.async_schedule_update_ha_state(force_refresh=True)
+        self.async_write_ha_state()
 
     async def up_brightness(self, **kwargs) -> None:
         """Increase brightness by one step"""
@@ -872,43 +934,6 @@ class NewZoneLight(LightEntity):
             self._brightness = self._brightness - self.brightness_step
             await self.async_turn_on(brightness=self._brightness, **kwargs)
 
-    async def async_update(self) -> None:
-        """Query underlying light entity and refresh internal state.
-
-        Called by HA when should_poll is True. Any state changes made here
-        will be written by HA immediately after this method returns.
-        """
-        if self._debug:
-            _LOGGER.debug(f"{self.name} LIGHT ASYNC_UPDATE")
-
-        f, r = self.getEntityNames()
-        state = self.hass.states.get(f)
-
-        if self._debug:
-            _LOGGER.debug(f"{self.name} LIGHT ASYNC_UPDATE State for entity {f}: {state}")
-
-        if state is not None:
-            self._hs_color = state.attributes.get(ATTR_HS_COLOR, self._hs_color)
-            self._rgb_color = state.attributes.get(ATTR_RGB_COLOR, self._rgb_color)
-            self._color_temp_kelvin = state.attributes.get(ATTR_COLOR_TEMP_KELVIN, self._color_temp_kelvin)
-            self._min_color_temp_kelvin = state.attributes.get(ATTR_MIN_COLOR_TEMP_KELVIN, self._min_color_temp_kelvin)
-            self._max_color_temp_kelvin = state.attributes.get(ATTR_MAX_COLOR_TEMP_KELVIN, self._max_color_temp_kelvin)
-
-        # Reload JSON buttonmap if it has changed on disk
-        if os.path.exists(self._button_map_file):
-            ts = os.path.getmtime(self._button_map_file)
-            if ts > self._button_map_timestamp:
-                if self._debug:
-                    _LOGGER.debug(f"{self.name} loading JSON button map file")
-
-                def loadJSON():
-                    to_return = json.load(open(self._button_map_file))
-                    return to_return
-
-                loop = asyncio.get_running_loop()
-                self._button_map_data = await loop.run_in_executor(None, loadJSON)
-                self._button_map_timestamp = ts
-
     async def switch_message_received(self, mqttmsg) -> None:
         # async def switch_message_received(self, topic: str, payload: str, qos: int) -> None:
         """A new MQTT message has been received."""
@@ -917,12 +942,10 @@ class NewZoneLight(LightEntity):
             if dev != self.switch:
                 return
             payload = mqttmsg.data.get("command")
-            if self._debug:
-                _LOGGER.debug(f"{self.name} switch: {payload}")
+            _LOGGER.debug(f"{self.name} switch: {payload}")
         else:
             topic, payload, qos = mqttmsg.topic, mqttmsg.payload, mqttmsg.qos
-            if self._debug:
-                _LOGGER.debug(f"{self.name} switch: {topic}, {payload}, {qos}")
+            _LOGGER.debug(f"{self.name} switch: {topic}, {payload}, {qos}")
 
         if "release" in payload:
             return
@@ -943,8 +966,7 @@ class NewZoneLight(LightEntity):
             for command in this_list:
                 self._switched_on = True
 
-                if self._debug:
-                    _LOGGER.debug(f"{self.name} JSON Switch command: {command}")
+                _LOGGER.debug(f"{self.name} JSON Switch command: {command}")
                 if command[0] == "Brightness":
                     ent = command[1]
                     br = command[2]
@@ -1010,8 +1032,7 @@ class NewZoneLight(LightEntity):
             self.clearButtonCounts()
             await self.async_turn_off(source="Switch")
         else:
-            if self._debug:
-                _LOGGER.debug(f"{self.name} switch handler fail: {payload}")
+            _LOGGER.debug(f"{self.name} switch handler fail: {payload}")
 
     def clearButtonCounts(self):
         for key in self._buttonCounts.keys():
@@ -1021,8 +1042,7 @@ class NewZoneLight(LightEntity):
         """Set motion sensor to 'on' state"""
         delta_found = False
 
-        if self._debug:
-            _LOGGER.debug(f"{self.name} motion sensor on: {entity_id}")
+        _LOGGER.debug(f"{self.name} motion sensor on: {entity_id}")
 
         if entity_id in self._occupancies:
             if self._occupancies[entity_id] != True:
@@ -1040,15 +1060,12 @@ class NewZoneLight(LightEntity):
         self._cancelSched(entity_id)
         #ret = async_call_later(self.hass, self.motion_sensor_timeout, lambda _: self.motion_sensor_off(entity_id))
         def schedule_motion_sensor_off(hass, now=None):
-            if self._debug:
-                _LOGGER.debug(f"{self.name} scheduling motion sensor off: {entity_id}")
+            _LOGGER.debug(f"{self.name} scheduling motion sensor off: {entity_id}")
             self.hass.create_task(self.motion_sensor_off(entity_id))
 
-        if self._debug:
-            _LOGGER.debug(f"{self.name} scheduling motion sensor off in {self.motion_sensor_timeout} seconds")
+        _LOGGER.debug(f"{self.name} scheduling motion sensor off in {self.motion_sensor_timeout} seconds")
         ret = async_call_later(self.hass, self.motion_sensor_timeout, schedule_motion_sensor_off)
-        if self._debug:
-            _LOGGER.debug(f"{self.name} scheduling complete")
+        _LOGGER.debug(f"{self.name} scheduling complete")
         self._addSched(entity_id, ret)
 
         if delta_found:
@@ -1056,8 +1073,7 @@ class NewZoneLight(LightEntity):
 
     async def motion_sensor_off(self, entity_id: str) -> None:
         """Set motion sensor to 'off' state"""
-        if self._debug:
-            _LOGGER.debug(f"{self.name} motion sensor off: {entity_id}")
+        _LOGGER.debug(f"{self.name} motion sensor off: {entity_id}")
 
         if entity_id in self._occupancies:
             self._occupancies[entity_id] = False
@@ -1093,8 +1109,7 @@ class NewZoneLight(LightEntity):
 
         payload = json.loads(payload)
         z, ms = topic.split("/")
-        if self._debug:
-            _LOGGER.debug(f"{self.name} motion sensor: {topic}, {payload}, {qos}")
+        _LOGGER.debug(f"{self.name} motion sensor: {topic}, {payload}, {qos}")
 
         if not ms in self._occupancies and not ms in self._full_brightness_occupancies:
             _LOGGER.error(f"{self.name}: Unexpected motion sensor name: {ms}")
@@ -1104,12 +1119,10 @@ class NewZoneLight(LightEntity):
             await self.motion_sensor_on(ms)
 
     async def motion_sensor_message_received_zha(self, ev) -> None:
-        if self._debug:
-            _LOGGER.debug(f"{self.name} motion sensor: {ev}")
+        _LOGGER.debug(f"{self.name} motion sensor: {ev}")
         payload = ev.data.get("new_state").state
         dev = ev.data.get("entity_id")
-        if self._debug:
-            _LOGGER.debug(f"{self.name} motion sensor payload: {payload}")
+        _LOGGER.debug(f"{self.name} motion sensor payload: {payload}")
 
         #payload = payload == "on"
 
@@ -1123,8 +1136,7 @@ class NewZoneLight(LightEntity):
     async def motion_disable_entity_update(self, this_event):
         """Track updates on motion_disable_entities"""
         ev = this_event.as_dict()
-        if self._debug:
-            _LOGGER.debug(f"{self.name}: motion_disable_entity_update: {ev}")
+        _LOGGER.debug(f"{self.name}: motion_disable_entity_update: {ev}")
 
         ent = ev["data"]["entity_id"]
         ns = ev["data"]["new_state"].state
@@ -1133,14 +1145,12 @@ class NewZoneLight(LightEntity):
         else:
             self.motion_disable_trackers[ent] = False
 
-        if self._debug:
-            _LOGGER.debug(f"{self.name}: motion_disable_entity_update: {ev} => {self.motion_disable_trackers[ent]}")
+        _LOGGER.debug(f"{self.name}: motion_disable_entity_update: {ev} => {self.motion_disable_trackers[ent]}")
 
     async def other_entity_update(self, this_event):
         """Track events of other entities"""
         ev = this_event.as_dict()
-        if self._debug:
-            _LOGGER.debug(f"{self.name} other entity update: {ev}")
+        _LOGGER.debug(f"{self.name} other entity update: {ev}")
 
         ent = ev["data"]["entity_id"]
         ns = ev["data"]["new_state"].state
