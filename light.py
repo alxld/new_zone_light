@@ -47,9 +47,10 @@ from homeassistant.const import (  # ATTR_SUPPORTED_FEATURES,; CONF_ENTITY_ID,; 
 
 # from enum import Enum
 import homeassistant.helpers.config_validation as cv
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers import event
 from homeassistant.helpers.entity import generate_entity_id
+from homeassistant.util import slugify
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
@@ -109,7 +110,7 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
 def setup_platform(hass: HomeAssistant, config: ConfigType, async_add_entities: AddEntitiesCallback, discovery_info: DiscoveryInfoType | None = None) -> None:
     """Set up the New Zone Light configuration"""
     
-    nzl = NewZoneLight(config.get(CONF_NAME), debug=config.get(CONF_DEBUG, False), debug_rl=config.get(CONF_DEBUG_RL, False))
+    nzl = NewZoneLight(config.get(CONF_NAME), unique_id=config.get(CONF_UNIQUE_ID), debug=config.get(CONF_DEBUG, False), debug_rl=config.get(CONF_DEBUG_RL, False))
 
     if config.get(CONF_ENTITIES):
         temp_dict = OrderedDict()
@@ -188,7 +189,7 @@ async def async_update(call: ServiceCall | None = None) -> None:
 class NewZoneLight(LightEntity):
     """New Light Super Class"""
 
-    def __init__(self, name, domain="new_zone_light", debug=False, debug_rl=False) -> None:
+    def __init__(self, name, unique_id=None, domain="new_zone_light", debug=False, debug_rl=False) -> None:
         """Initialize NewLight Super Class."""
 
         if debug:
@@ -307,6 +308,8 @@ class NewZoneLight(LightEntity):
         """Single attribute for tracking overall full-brightness occupancy state"""
         self._entity_id = generate_entity_id(ENTITY_ID_FORMAT, self.name, [])
         """Generates a unique entity ID based on instance's name"""
+        self._unique_id = unique_id or f"new_zone_light_{slugify(name)}"
+        """Stable unique identifier for HA's entity registry"""
         # self._white_value: Optional[int] = None
         self._effect_list: Optional[List[str]] = None
         """A list of supported effects"""
@@ -501,7 +504,7 @@ class NewZoneLight(LightEntity):
     @property
     def unique_id(self):
         """Return the unique id of the light."""
-        return self._entity_id
+        return self._unique_id
 
     @property
     def available(self) -> bool:
@@ -875,30 +878,29 @@ class NewZoneLight(LightEntity):
             self._brightness = self._brightness - self.brightness_step
             await self.async_turn_on(brightness=self._brightness, **kwargs)
 
-    async def async_update_ha_state(self, force_refresh: bool = False) -> None:
-        """Query light and determine the state."""
+    async def async_update(self) -> None:
+        """Query underlying light entity and refresh internal state.
+
+        Called by HA when should_poll is True. Any state changes made here
+        will be written by HA immediately after this method returns.
+        """
         if self._debug:
             _LOGGER.debug(f"{self.name} LIGHT ASYNC_UPDATE")
-
-        await super().async_update_ha_state(force_refresh)
 
         f, r = self.getEntityNames()
         state = self.hass.states.get(f)
 
         if self._debug:
             _LOGGER.debug(f"{self.name} LIGHT ASYNC_UPDATE State for entity {f}: {state}")
-            #_LOGGER.debug(f"{self.name} LIGHT ASYNC_UPDATE effect_list: {self._effect_list}")
 
-        if state == None:
-            return
+        if state is not None:
+            self._hs_color = state.attributes.get(ATTR_HS_COLOR, self._hs_color)
+            self._rgb_color = state.attributes.get(ATTR_RGB_COLOR, self._rgb_color)
+            self._color_temp_kelvin = state.attributes.get(ATTR_COLOR_TEMP_KELVIN, self._color_temp_kelvin)
+            self._min_color_temp_kelvin = state.attributes.get(ATTR_MIN_COLOR_TEMP_KELVIN, self._min_color_temp_kelvin)
+            self._max_color_temp_kelvin = state.attributes.get(ATTR_MAX_COLOR_TEMP_KELVIN, self._max_color_temp_kelvin)
 
-        self._hs_color = state.attributes.get(ATTR_HS_COLOR, self._hs_color)
-        self._rgb_color = state.attributes.get(ATTR_RGB_COLOR, self._rgb_color)
-        self._color_temp_kelvin = state.attributes.get(ATTR_COLOR_TEMP_KELVIN, self._color_temp_kelvin)
-        self._min_color_temp_kelvin = state.attributes.get(ATTR_MIN_COLOR_TEMP_KELVIN, self._min_color_temp_kelvin)
-        self._max_color_temp_kelvin = state.attributes.get(ATTR_MAX_COLOR_TEMP_KELVIN, self._max_color_temp_kelvin)
-
-        # Reload JSON buttonmap regularly
+        # Reload JSON buttonmap if it has changed on disk
         if os.path.exists(self._button_map_file):
             ts = os.path.getmtime(self._button_map_file)
             if ts > self._button_map_timestamp:
@@ -913,7 +915,6 @@ class NewZoneLight(LightEntity):
                 self._button_map_data = await loop.run_in_executor(None, loadJSON)
                 self._button_map_timestamp = ts
 
-    @callback
     async def switch_message_received(self, mqttmsg) -> None:
         # async def switch_message_received(self, topic: str, payload: str, qos: int) -> None:
         """A new MQTT message has been received."""
@@ -1091,7 +1092,6 @@ class NewZoneLight(LightEntity):
         else:
             self.hass.async_create_task(self.async_turn_off(source="MotionSensor"))
 
-    @callback
     async def motion_sensor_message_received(self, mqttmsg) -> None:
         """A new MQTT message has been received."""
         # async def motion_sensor_message_received( self, topic: str, payload: str, qos: int) -> None:
@@ -1109,7 +1109,6 @@ class NewZoneLight(LightEntity):
         if payload['occupancy'] == "on" or payload['occupancy'] == True:
             await self.motion_sensor_on(ms)
 
-    @callback
     async def motion_sensor_message_received_zha(self, ev) -> None:
         if self._debug:
             _LOGGER.debug(f"{self.name} motion sensor: {ev}")
@@ -1127,7 +1126,6 @@ class NewZoneLight(LightEntity):
         if payload == "on":
             await self.motion_sensor_on(dev)
         
-    @callback
     async def motion_disable_entity_update(self, this_event):
         """Track updates on motion_disable_entities"""
         ev = this_event.as_dict()
@@ -1144,7 +1142,6 @@ class NewZoneLight(LightEntity):
         if self._debug:
             _LOGGER.debug(f"{self.name}: motion_disable_entity_update: {ev} => {self.motion_disable_trackers[ent]}")
 
-    @callback
     async def other_entity_update(self, this_event):
         """Track events of other entities"""
         ev = this_event.as_dict()
