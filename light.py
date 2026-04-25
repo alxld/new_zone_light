@@ -107,7 +107,7 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
     }
 )
 
-def setup_platform(hass: HomeAssistant, config: ConfigType, async_add_entities: AddEntitiesCallback, discovery_info: DiscoveryInfoType | None = None) -> None:
+async def async_setup_platform(hass: HomeAssistant, config: ConfigType, async_add_entities: AddEntitiesCallback, discovery_info: DiscoveryInfoType | None = None) -> None:
     """Set up the New Zone Light configuration"""
     
     nzl = NewZoneLight(config.get(CONF_NAME), unique_id=config.get(CONF_UNIQUE_ID), debug=config.get(CONF_DEBUG, False), debug_rl=config.get(CONF_DEBUG_RL, False))
@@ -179,12 +179,6 @@ def setup_platform(hass: HomeAssistant, config: ConfigType, async_add_entities: 
     if nzl._debug:
         _LOGGER.debug(f"{nzl.name}: Done")
 
-async def async_update(call: ServiceCall | None = None) -> None:
-    """Update lights"""
-    await nzl.async_update()
-
-#service_name = f"{name} update"
-#hass.services.async_register(LIGHT_DOMAIN, service_name, async_update)
 
 class NewZoneLight(LightEntity):
     """New Light Super Class"""
