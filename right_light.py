@@ -10,7 +10,7 @@ from datetime import date, timedelta
 class RightLight:
     """RightLight object to control a single light or light group"""
     validate_delay = 2 # Seconds to wait before validating a change
-    validate_brightness_threshold = 5  # Brightness difference to consider a change valid
+    validate_brightness_threshold = 10  # Brightness difference to consider a change valid
     validate_ct_threshold = 10  # Color temperature difference to consider a change valid
     validate_color_threshold = 30  # Color difference to consider a change valid (per RGB channel)
     trans_delay_min = 5  # Minimum seconds for a transition
@@ -185,9 +185,31 @@ class RightLight:
                 if self._debug:
                     self._logger.error(f"turn_on_now done")
 
+            #async def turn_on_now(_):
+            #    state = self._hass.states.get(self._entity)
+            #    bulb_was_off = state is None or state.state != "on"
+            #    if bulb_was_off:
+            #        await self._hass.services.async_call(
+            #            "light", "turn_on",
+            #            {"entity_id": self._entity},
+            #            blocking=True,
+            #        )
+            #        await asyncio.sleep(0.1)
+            #    await self._hass.services.async_call(
+            #        "light", "turn_on",
+            #        {
+            #            "entity_id": self._entity,
+            #            "brightness": br,
+            #            "color_temp_kelvin": ct,
+            #            "transition": this_transition,
+            #        },
+            #        blocking=True,
+            #    )
+
             async def turn_on_next(_):
                 if self._debug:
                     self._logger.error(f"turn_on_next start.  br/ct: {br_next}/{ct_next}, transition: {time_rem}")
+                remaining = max(0, int(round((next_time - dt.now()).total_seconds())))
                 await self._hass.services.async_call(
                     "light",
                     "turn_on",
@@ -195,7 +217,7 @@ class RightLight:
                         "entity_id": self._entity,
                         "brightness": br_next,
                         "color_temp_kelvin": ct_next,
-                        "transition": time_rem,
+                        "transition": remaining,
                     },
                     blocking=True,
                 )
@@ -256,7 +278,8 @@ class RightLight:
 
                     # Schedule another turn_on at next_time to start the next transition
                     # Add 1 second to ensure next event is after trigger point
-                    ret = async_call_later(self._hass, (next_time - self.now).seconds + 1, schedule_next_turn_on)
+                    remaining = max(0, int(round((next_time - dt.now()).total_seconds())))
+                    ret = async_call_later(self._hass, remaining + 1, schedule_next_turn_on)
                     self._addSched(ret)
                 else:
                     # Entity is not correct, so turn it on and reschedule validation
@@ -332,6 +355,7 @@ class RightLight:
             async def turn_on_rgb_next(_):
                 if self._debug:
                     self._logger.error(f"turn_on_rgb_next start")
+                remaining = max(0, int(round((next_time - dt.now()).total_seconds())))
                 await self._hass.services.async_call(
                     "light",
                     "turn_on",
@@ -339,7 +363,7 @@ class RightLight:
                         "entity_id": self._entity,
                         "brightness": self._brightness,
                         "rgb_color": next_rgb,
-                        "transition": time_rem,
+                        "transition": remaining,
                     },
                     blocking=True,
                 )
@@ -398,7 +422,8 @@ class RightLight:
                     # Add 1 second to ensure next event is after trigger point
                     if self._debug:
                         self._logger.error(f"Valmode: Scheduling next color change at {next_time}")
-                    ret = async_call_later(self._hass, (next_time - self.now).seconds + 1, schedule_next_rgb_turn_on)
+                    remaining = max(0, int(round((next_time - dt.now()).total_seconds())))
+                    ret = async_call_later(self._hass, remaining + 1, schedule_next_rgb_turn_on)
                     self._addSched(ret)
                 else:
                     # Entity is not correct, so turn it on again and reschedule validation
@@ -444,10 +469,16 @@ class RightLight:
             self._logger.error(f"turn_on_specific: {data}")
         await self.disable()
 
+        # Make a copy of data to avoid modifying the shared dict
+        data = dict(data)
+        
         if not "transition" in data:
             data["transition"] = self.on_transition
         if not "brightness" in data:
             data["brightness"] = 255
+
+        # Ensure the data has the correct entity_id for this RightLight instance
+        data["entity_id"] = self._entity
 
         # await self._turn_on_specific(data)
         await self._hass.services.async_call("light", "turn_on", data)

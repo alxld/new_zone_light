@@ -123,20 +123,18 @@ async def async_setup_platform(hass: HomeAssistant, config: ConfigType, async_ad
     if config.get(CONF_ENTITIES_BELOW_THRESHOLD):
         temp_dict = {}
         for ent in config.get(CONF_ENTITIES_BELOW_THRESHOLD):
-            #if not ent in nzl.entities:
-            #    nzl.entities[ent] = None
+            if ent in nzl.entities:
+                raise ValueError(f"Entity {ent} cannot be in both normal and below-threshold lists")
             _LOGGER.debug(f"{nzl.name}: Adding {ent} below threshold")
-            #nzl.entities_below_threshold.append(ent)
             temp_dict[ent] = None
         nzl.entities_below_threshold = temp_dict
 
     if config.get(CONF_ENTITIES_ABOVE_THRESHOLD):
         temp_dict = {}
         for ent in config.get(CONF_ENTITIES_ABOVE_THRESHOLD):
-            #if not ent in nzl.entities:
-            #    nzl.entities[ent] = None
+            if ent in nzl.entities or ent in nzl.entities_below_threshold:
+                raise ValueError(f"Entity {ent} cannot be in multiple threshold lists")
             _LOGGER.debug(f"{nzl.name}: Adding {ent} above threshold")
-            #nzl.entities_above_threshold.append(ent)
             temp_dict[ent] = None
         nzl.entities_above_threshold = temp_dict
 
@@ -208,9 +206,6 @@ class NewZoneLight(LightEntity):
         self.brightness_multiplier = {}
         """Dictionary of entity keys to brightness multipliers"""
 
-        # self.has_switch = False
-        # """Does this light have an associated switch?  Override to set to true if needed"""
-
         self.switch = None
         """MQTT topic to monitor for switch activity.  Typically '<room> Switch' """
 
@@ -226,9 +221,6 @@ class NewZoneLight(LightEntity):
         self.brightness_threshold = 128
         """Brightness threshold above which to also turn on second light entity"""
 
-        # self.harmony_entity = None
-        # """Entity name of harmony hub if one exists"""
-
         self.motion_disable_entities = []
         """List of entities for which to disable motion sensing if they're on"""
 
@@ -236,7 +228,7 @@ class NewZoneLight(LightEntity):
         """Dictionary of current states for motion disable entities"""
 
         self.brightness_step = 43
-        """Step to increment/decrement brightness when using a switch"""
+        """Step to increment/decrement brightness when using a switch, 1/6 of full brightness"""
 
         self.motion_sensor_brightness = 192
         """Brightness of this light when a motion sensor turns it on"""
@@ -353,9 +345,6 @@ class NewZoneLight(LightEntity):
         self._switched_on = False
         """Boolean showing whether the light was turned on by a switch/GUI"""
 
-        # self._harmony_on = False
-        # """Track state of associated harmony hub"""
-
         self._debug = debug
         """Boolean to enable debug mode"""
 
@@ -394,18 +383,25 @@ class NewZoneLight(LightEntity):
             self._others[ent] = False
 
         # Instantiate per-entity rightlight objects
-        for entname in self.entities.keys():
+        for entname in list(self.entities.keys()):
             self.entities[entname] = RightLight(entname, self.hass, self._debug_rl)
 
             # Add RightLight color mode to effects list
             #self._effect_list = ["Normal"] + self.entities[entname].getColorModes()
-            self._effect_list = self.entities[entname].getColorModes()
+            if not self._effect_list:
+                self._effect_list = self.entities[entname].getColorModes()
 
         for entname in self.entities_above_threshold:
             self.entities_above_threshold[entname] = RightLight(entname, self.hass, self._debug_rl)
+
+            if not self._effect_list:
+                self._effect_list = self.entities_above_threshold[entname].getColorModes()
         
         for entname in self.entities_below_threshold:
             self.entities_below_threshold[entname] = RightLight(entname, self.hass, self._debug_rl)
+
+            if not self._effect_list:
+                self._effect_list = self.entities_below_threshold[entname].getColorModes()
 
         # Subscribe to switch events
         if self.switch != None:
@@ -446,12 +442,6 @@ class NewZoneLight(LightEntity):
         #        self.motion_sensor_action, self.motion_sensor_message_received
         #    )
 
-        ## Subscribe to harmony events
-        # if self.harmony_entity != None:
-        #    event.async_track_state_change_event(
-        #        self.hass, self.harmony_entity, self.harmony_update
-        #    )
-
         # Subscribe to motion_disable_entities events
         for ent in self.motion_disable_entities:
             _LOGGER.debug(f"{self.name} motion_disable_entity added: {ent}")
@@ -467,16 +457,17 @@ class NewZoneLight(LightEntity):
                 )
             )
 
-        # Push-based color/brightness tracking: watch the first underlying
-        # entity for state changes so we can mirror its color attributes
-        # without polling.
-        f, _r = self.getEntityNames() if (self.entities or self.entities_above_threshold or self.entities_below_threshold) else (None, None)
-        if f:
-            self._unsubs.append(
-                event.async_track_state_change_event(
-                    self.hass, f, self._underlying_state_changed
-                )
-            )
+# Removing this because I don't want to use getEntityNames any more and I don't know what this code is doing! :)
+#        # Push-based color/brightness tracking: watch the first underlying
+#        # entity for state changes so we can mirror its color attributes
+#        # without polling.
+#        f, _r = self.getEntityNames() if (self.entities or self.entities_above_threshold or self.entities_below_threshold) else (None, None)
+#        if f:
+#            self._unsubs.append(
+#                event.async_track_state_change_event(
+#                    self.hass, f, self._underlying_state_changed
+#                )
+#            )
 
         # Periodic button-map reload (replaces the on-poll reload that lived
         # in async_update). 60s is plenty for a config file.
@@ -640,7 +631,6 @@ class NewZoneLight(LightEntity):
             # None (off) or 0 → default to full
             self._brightness = 255
 
-        #if self.has_brightness_threshold:
         if self.entities_below_threshold or self.entities_above_threshold:
             if self._brightness > self.brightness_threshold:
                 self._brightnessBT = 255
@@ -666,52 +656,34 @@ class NewZoneLight(LightEntity):
         # Always assume RightLight is enabled.  Will override based on ATTR_* inputs
         rl = True
 
-        f, r = self.getEntityNames()
+        #f, r = self.getEntityNames()
 
         # Select correct transition unless overridden by kwargs
-        if "transition" in kwargs:
-            data = {
-                ATTR_ENTITY_ID: f,
-                "transition": kwargs["transition"],
-            }
-        else:
-            if "source" in kwargs:
-                if kwargs["source"] == "Switch":
-                    data = {
-                        ATTR_ENTITY_ID: f,
-                        "transition": self.switch_transition,
-                    }
-                elif kwargs["source"] == "MotionSensor":
-                    data = {
-                        ATTR_ENTITY_ID: f,
-                        "transition": self.motion_sensor_transition,
-                    }
-                else:
-                    data = {
-                        ATTR_ENTITY_ID: f,
-                        "transition": self.default_transition,
-                    }
+        if 'transition' in kwargs:
+            this_transition = kwargs['transition']
+        elif 'source' in kwargs:
+            if kwargs['source'] == 'Switch':
+                this_transition = self.switch_transition
+            elif kwargs['source'] == 'MotionSensor':
+                this_transition = self.motion_sensor_transition
             else:
-                data = {
-                    ATTR_ENTITY_ID: f,
-                    "transition": self.default_transition,
-                }
-        # data = {ATTR_ENTITY_ID: list(self.entities.keys())[0], "transition": 0.1}
+                this_transition = self.default_transition
+        else:
+            this_transition = self.default_transition
+        #data = {ATTR_ENTITY_ID: f, "transition": this_transition}
+        data = {"transition": this_transition}
 
         # Copy over handled attributes and disable RightLight for color/colormode/colortemp attribute usage cases
-        if ATTR_BRIGHTNESS in kwargs:
-            data[ATTR_BRIGHTNESS] = kwargs[ATTR_BRIGHTNESS]
-        # if ATTR_TRANSITION in kwargs:
-        #    data[ATTR_TRANSITION] = kwargs[ATTR_TRANSITION]
-
         for this_attr in [
+            ATTR_BRIGHTNESS,
             ATTR_HS_COLOR,
             ATTR_RGB_COLOR,
             ATTR_COLOR_TEMP_KELVIN,
             ATTR_COLOR_MODE,
         ]:
             if this_attr in kwargs:
-                rl = False
+                if this_attr != ATTR_BRIGHTNESS:
+                    rl = False
                 data[this_attr] = kwargs[this_attr]
 
         # Override RightLight mode if specificied
@@ -733,17 +705,15 @@ class NewZoneLight(LightEntity):
             elif ATTR_RGB_COLOR in kwargs or ATTR_HS_COLOR in kwargs:
                 self._color_mode = ColorMode.RGB
 
+        # Report out full data details
         _LOGGER.debug(f"{self.name} LIGHT ASYNC_TURN_ON: Data: {data}")
 
-        #f, r = self.getEntityNames()
-
-        # Disable RightLight for other entities before turning on main entity
-        for ent in self.entities:
-            await self.entities[ent].disable()
-        for ent in self.entities_below_threshold:
-            await self.entities_below_threshold[ent].disable()
-        for ent in self.entities_above_threshold:
-            await self.entities_above_threshold[ent].disable()
+        # Disable RightLight for all entities before turning on this configuration, to ensure 
+        # a clean state and avoid conflicts between RL and specific attribute inputs.  Will re-enable
+        # for entities as needed based on inputs.
+        all_entities = list(self.entities.values()) + list(self.entities_below_threshold.values()) + list(self.entities_above_threshold.values())
+        for ent_obj in all_entities:
+            await ent_obj.disable()
 
         # Process non-threshold entities
         for ent in self.entities:
@@ -820,17 +790,20 @@ class NewZoneLight(LightEntity):
 
         self.async_write_ha_state()
 
-    def getEntityNames(self):
-        """Split entity key list into first (default) and rest list"""
-        if self.entities:
-            k = list(self.entities.keys())
-            return k[0], k[1:]
-        elif self.entities_above_threshold:
-            k = list(self.entities_above_threshold.keys())
-            return k[0], (k[1:]) + list(self.entities_below_threshold.keys())
-        else:
-            k = list(self.entities_below_threshold.keys())
-            return k[0], (k[1:]) + list(self.entities_above_threshold.keys())
+#    def getEntityNames(self):
+#        """Split entity key list into first (default) and rest list"""
+#        if self.entities:
+#            k = list(self.entities.keys())
+#            return k[0], k[1:]
+#        else:
+#            k = list(self.entities_below_threshold.keys()) + list(self.entities_above_threshold.keys())
+#            return k[0], k[1:]
+#        #elif self.entities_above_threshold:
+#        #    k = list(self.entities_above_threshold.keys())
+#        #    return k[0], (k[1:]) + list(self.entities_below_threshold.keys())
+#        #else:
+#        #    k = list(self.entities_below_threshold.keys())
+#        #    return k[0], (k[1:]) + list(self.entities_above_threshold.keys())
 
     async def async_turn_on_mode(self, **kwargs) -> None:
         """Turn on one of RightLight's color modes"""
@@ -857,8 +830,13 @@ class NewZoneLight(LightEntity):
         _LOGGER.debug(f"{self.name} LIGHT ASYNC_TURN_OFF: {kwargs, self._switched_on, self._occupancy, self._full_brightness_occupancy}")
 
         # If the light wasn't switched on, or if there is no occupancy, turn off
-        if (self._switched_on == False) or (self._occupancy == False):
-            _LOGGER.debug(f"{self.name} LIGHT ASYNC_TURN_OFF: Turning off")
+        if ('source' in kwargs) and (kwargs['source'] == 'MotionSensor'):
+            _LOGGER.debug(f"{self.name} LIGHT ASYNC_TURN_OFF: Motion sensor source, checking occupancy")
+            if not self._occupancy and not self._full_brightness_occupancy and not self._switched_on:
+                _LOGGER.debug(f"{self.name} LIGHT ASYNC_TURN_OFF: Motion sensor source, no occupancy, turning off")
+                await self._async_turn_off_helper(**kwargs)
+        elif ('source' in kwargs) and (kwargs['source'] == 'Switch'):
+            _LOGGER.debug(f"{self.name} LIGHT ASYNC_TURN_OFF: Switch source, checking occupancy")
             await self._async_turn_off_helper(**kwargs)
         elif self._occupancy or self._full_brightness_occupancy:
             _LOGGER.debug(f"{self.name} LIGHT ASYNC_TURN_OFF: Switching to motion sensor mode")
@@ -868,10 +846,13 @@ class NewZoneLight(LightEntity):
             if any(self.motion_disable_trackers.values()):
                 await self._async_turn_off_helper(**kwargs)
             else:
-                if self._full_brightness_occupancies:
+                if self._full_brightness_occupancy:
                     await self.async_turn_on(brightness=255, source="MotionSensor")
                 else:
                     await self.async_turn_on(brightness=self.motion_sensor_brightness, source="MotionSensor")
+        else:
+            _LOGGER.debug(f"{self.name} LIGHT ASYNC_TURN_OFF: No occupancy, turning off")
+            await self._async_turn_off_helper(**kwargs)
 
     async def _async_turn_off_helper(self, **kwargs) -> None:
         """Instruct the light to turn off."""
@@ -895,7 +876,7 @@ class NewZoneLight(LightEntity):
             await self.entities_above_threshold[ent].disable_and_turn_off(**kwargs)
         for ent in self.entities_below_threshold:
             await self.entities_below_threshold[ent].disable_and_turn_off(**kwargs)
-        f, r = self.getEntityNames()
+        #f, r = self.getEntityNames()
         # Disable other entities before turning off main entity
         #for ent in r:
         for ent in self.entities:
@@ -1050,6 +1031,8 @@ class NewZoneLight(LightEntity):
             self._occupancies[entity_id] = True
             self._occupancy = any(self._occupancies.values())
         elif entity_id in self._full_brightness_occupancies:
+            if self._full_brightness_occupancies[entity_id] != True:
+                delta_found = True
             self._full_brightness_occupancies[entity_id] = True
             self._full_brightness_occupancy = any(self._full_brightness_occupancies.values())
         else:
