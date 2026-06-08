@@ -39,7 +39,8 @@ class RightLight:
 
         self.on_transition = 0.2
         self.on_color_transition = 0.2
-        self.off_transition = 0.2
+        #self.off_transition = 0.2
+        self.off_transition = 1.2
         self.dim_transition = 0.2
 
         # Store callback for cancelling scheduled next event

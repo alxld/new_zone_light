@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "WebFetch(domain:developers.home-assistant.io)",
+      "Bash(python3 -c \"import uuid; [print\\(uuid.uuid4\\(\\).hex\\) for _ in range\\(18\\)]\")",
+      "Bash(python -c ' *)",
+      "Bash(python)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('H:/custom_components/new_zone_light/light.py'\\).read\\(\\)\\); print\\('OK'\\)\")"
+    ]
+  }
+}
