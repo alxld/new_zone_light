@@ -242,7 +242,7 @@ class NewZoneLight(LightEntity):
         self.motion_sensor_timeout = 15
         """Default number of seconds after motion sensor off event before triggering off"""
 
-        self.default_transition = 0.1
+        self.default_transition = 0.5
         """Default transition when no source is known"""
 
         self.other_light_trackers = {}
@@ -445,9 +445,20 @@ class NewZoneLight(LightEntity):
         # Subscribe to motion_disable_entities events
         for ent in self.motion_disable_entities:
             _LOGGER.debug(f"{self.name} motion_disable_entity added: {ent}")
+            self.motion_disable_trackers[ent] = False
             self._unsubs.append(
                 event.async_track_state_change_event(self.hass, ent, self.motion_disable_entity_update)
             )
+            state = self.hass.states.get(ent)
+            if state is not None:
+                self.motion_disable_trackers[ent] = state.state in ("on", "playing")
+                _LOGGER.debug(
+                    f"{self.name}: initialized motion_disable_tracker[{ent}] = {self.motion_disable_trackers[ent]} (state={state.state})"
+                )
+            else:
+                _LOGGER.debug(
+                    f"{self.name}: initialize motion_disable_tracker[{ent}] = False (entity state unavailable)"
+                )
 
         # Subscribe to other entity events
         for ent in self.other_light_trackers.keys():
@@ -824,25 +835,39 @@ class NewZoneLight(LightEntity):
 
     async def async_turn_off(self, **kwargs) -> None:
         """Instruct the light to turn off, conditionally."""
-        self._occupancy = any(self._occupancies.values())
-        self._full_brightness_occupancy = any(self._full_brightness_occupancies.values())
+        self._update_occupancy()
 
         _LOGGER.debug(f"{self.name} LIGHT ASYNC_TURN_OFF: {kwargs, self._switched_on, self._occupancy, self._full_brightness_occupancy}")
 
-        # If the light wasn't switched on, or if there is no occupancy, turn off
         if ('source' in kwargs) and (kwargs['source'] == 'MotionSensor'):
             _LOGGER.debug(f"{self.name} LIGHT ASYNC_TURN_OFF: Motion sensor source, checking occupancy")
             if not self._occupancy and not self._full_brightness_occupancy and not self._switched_on:
                 _LOGGER.debug(f"{self.name} LIGHT ASYNC_TURN_OFF: Motion sensor source, no occupancy, turning off")
                 await self._async_turn_off_helper(**kwargs)
-        elif ('source' in kwargs) and (kwargs['source'] == 'Switch'):
-            _LOGGER.debug(f"{self.name} LIGHT ASYNC_TURN_OFF: Switch source, checking occupancy")
+            return
+
+        if ('source' in kwargs) and (kwargs['source'] == 'Switch'):
+            _LOGGER.debug(f"{self.name} LIGHT ASYNC_TURN_OFF: Switch source, checking manual mode")
+            if self._switched_on and (self._occupancy or self._full_brightness_occupancy) and not any(self.motion_disable_trackers.values()):
+                _LOGGER.debug(f"{self.name} LIGHT ASYNC_TURN_OFF: Manual switch off with occupancy, switching back to motion sensor mode")
+                self._switched_on = False
+                if self._full_brightness_occupancy:
+                    await self.async_turn_on(brightness=255, source="MotionSensor")
+                else:
+                    await self.async_turn_on(brightness=self.motion_sensor_brightness, source="MotionSensor")
+                return
             await self._async_turn_off_helper(**kwargs)
-        elif self._occupancy or self._full_brightness_occupancy:
+            return
+
+        if self._switched_on:
+            _LOGGER.debug(f"{self.name} LIGHT ASYNC_TURN_OFF: Manual off, overriding motion sensors")
+            await self._async_turn_off_helper(**kwargs)
+            return
+
+        if self._occupancy or self._full_brightness_occupancy:
             _LOGGER.debug(f"{self.name} LIGHT ASYNC_TURN_OFF: Switching to motion sensor mode")
             self._switched_on = False
 
-            # Turn off if motion disable entities are on, otherwise switch to motion sensor mode
             if any(self.motion_disable_trackers.values()):
                 await self._async_turn_off_helper(**kwargs)
             else:
@@ -850,9 +875,10 @@ class NewZoneLight(LightEntity):
                     await self.async_turn_on(brightness=255, source="MotionSensor")
                 else:
                     await self.async_turn_on(brightness=self.motion_sensor_brightness, source="MotionSensor")
-        else:
-            _LOGGER.debug(f"{self.name} LIGHT ASYNC_TURN_OFF: No occupancy, turning off")
-            await self._async_turn_off_helper(**kwargs)
+            return
+
+        _LOGGER.debug(f"{self.name} LIGHT ASYNC_TURN_OFF: No occupancy, turning off")
+        await self._async_turn_off_helper(**kwargs)
 
     async def _async_turn_off_helper(self, **kwargs) -> None:
         """Instruct the light to turn off."""
@@ -1060,21 +1086,22 @@ class NewZoneLight(LightEntity):
 
         if entity_id in self._occupancies:
             self._occupancies[entity_id] = False
-            self._occupancy = any(self._occupancies.values())
         elif entity_id in self._full_brightness_occupancies:
             self._full_brightness_occupancies[entity_id] = False
-            self._full_brightness_occupancy = any(self._full_brightness_occupancies.values())
         else:
             _LOGGER.error(f"{self.name}: Unexpected motion sensor name: {entity_id}")
             return
 
+        self._update_occupancy()
         await self.handle_motion_sensor_state()
     
+    def _update_occupancy(self) -> None:
+        """Recalculate overall motion occupancy state."""
+        self._occupancy = any(self._occupancies.values())
+        self._full_brightness_occupancy = any(self._full_brightness_occupancies.values())
+
     async def handle_motion_sensor_state(self) -> None:
         """Handle motion sensor state changes"""
-        # Schedule motion_sensor_off call after timeout
-        #self._cancelSched()
-
         if self._switched_on:
             return
 
@@ -1087,7 +1114,6 @@ class NewZoneLight(LightEntity):
 
     async def motion_sensor_message_received(self, mqttmsg) -> None:
         """A new MQTT message has been received."""
-        # async def motion_sensor_message_received( self, topic: str, payload: str, qos: int) -> None:
         topic, payload, qos = mqttmsg.topic, mqttmsg.payload, mqttmsg.qos
 
         payload = json.loads(payload)
@@ -1098,8 +1124,11 @@ class NewZoneLight(LightEntity):
             _LOGGER.error(f"{self.name}: Unexpected motion sensor name: {ms}")
             return
 
-        if payload['occupancy'] == "on" or payload['occupancy'] == True:
+        occupancy = payload.get('occupancy')
+        if occupancy == "on" or occupancy is True:
             await self.motion_sensor_on(ms)
+        else:
+            _LOGGER.debug(f"{self.name} motion sensor off event ignored: {ms} => {occupancy}")
 
     async def motion_sensor_message_received_zha(self, ev) -> None:
         _LOGGER.debug(f"{self.name} motion sensor: {ev}")
@@ -1107,14 +1136,14 @@ class NewZoneLight(LightEntity):
         dev = ev.data.get("entity_id")
         _LOGGER.debug(f"{self.name} motion sensor payload: {payload}")
 
-        #payload = payload == "on"
-
         if not dev in self._occupancies and not dev in self._full_brightness_occupancies:
             _LOGGER.error(f"{self.name}: Unexpected ZHA motion sensor name: {dev}")
             return
 
         if payload == "on":
             await self.motion_sensor_on(dev)
+        else:
+            _LOGGER.debug(f"{self.name} motion sensor off event ignored: {dev} => {payload}")
         
     async def motion_disable_entity_update(self, this_event):
         """Track updates on motion_disable_entities"""
